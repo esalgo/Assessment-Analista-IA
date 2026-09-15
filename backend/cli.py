@@ -1,9 +1,13 @@
 """CLI del pipeline de leads. Cada etapa es un subcomando y corre sola."""
 
+import json
+from typing import Annotated
+
 import typer
 
 from backend.db.migrar import aplicar_migraciones
 from backend.stages.dedupe import deduplicar
+from backend.stages.extract_ai import PROMPT_VERSION, extraer_conversaciones, medir_variabilidad
 from backend.stages.ingest import ErrorDeFormato, ingestar
 from backend.stages.load_reference import ErrorDeReferencia, cargar_referencia
 from backend.stages.normalize import ErrorDeCatalogo, normalizar
@@ -82,9 +86,36 @@ def dedupe() -> None:
 
 
 @app.command("extract-ai")
-def extract_ai() -> None:
+def extract_ai(
+    limite: Annotated[int | None, typer.Option(help="Máximo de leads a enviar al LLM (muestras).")] = None,
+    lead_id: Annotated[list[str] | None, typer.Option(help="Solo este lead; se puede repetir.")] = None,
+) -> None:
     """Extrae señales de las conversaciones con el LLM, con caché."""
-    _pendiente("extract-ai")
+    resultado = extraer_conversaciones(limite, lead_id)
+    for nombre, cantidad in sorted(resultado.conteos.items()):
+        typer.echo(f"[extract-ai] {nombre:<50} {cantidad:>5}")
+    for lead, error in resultado.fallidas:
+        typer.echo(f"[extract-ai] FALLIDA {lead}: {error}", err=True)
+
+
+@app.command("medir-ruido")
+def medir_ruido(
+    lead_id: Annotated[list[str], typer.Option(help="Lead a repetir; se puede repetir la opción.")],
+    repeticiones: Annotated[int, typer.Option(help="Llamadas idénticas por lead.")] = 3,
+) -> None:
+    """Repite la extracción sin caché ni guardado y reporta qué campos cambian."""
+    salidas = medir_variabilidad(lead_id, repeticiones)
+    campos = list(next(iter(salidas.values()))[0])
+    variaron: dict[str, int] = {campo: 0 for campo in campos}
+    for lead, corridas in sorted(salidas.items()):
+        for campo in campos:
+            valores = [json.dumps(c[campo], ensure_ascii=False) for c in corridas]
+            if len(set(valores)) > 1:
+                variaron[campo] += 1
+                typer.echo(f"[medir-ruido] {lead} {campo}: {' / '.join(valores)}")
+    typer.echo(f"[medir-ruido] {PROMPT_VERSION}, {len(salidas)} leads x {repeticiones} llamadas")
+    for campo, cantidad in variaron.items():
+        typer.echo(f"[medir-ruido] {campo:<28} varió en {cantidad:>2} de {len(salidas)} leads")
 
 
 @app.command()

@@ -105,6 +105,23 @@ Clave de identidad `(empresa_id, telefono_normalizado)`. Un teléfono en dos com
 - **`motivo_fusion`** en cada absorbido: regla, confianza (1,0, o 0,8 en los 2 grupos con una fecha de registro ambigua, porque la elección del canónico también lo es), si cruzó canal y `comparacion_nombre`.
 - **El canónico no hereda datos de los absorbidos.** La cola del día debe consolidar estado y primer contacto sobre el grupo completo (41 de 49 grupos tienen estados distintos).
 
+### Extracción con LLM: corregir una definición de negocio no es perseguir un fallo del prompt
+
+Cinco versiones del prompt, medidas sobre una muestra fija y sobre subconjuntos dirigidos. Detalle completo en [`docs/validacion.md`](docs/validacion.md).
+
+- **Antes de atribuir una mejora al prompt se midió el ruido del modelo** (`python -m backend.cli medir-ruido`). Con `temperature=0`, solo `intencion_declarada` varía entre llamadas idénticas.
+- **Un arreglo de schema, no de texto.** El modelo escribe el JSON en el orden de las propiedades. `cuota_inicial_cop` iba antes de `forma_pago`, así que el monto se fijaba antes de saber que la compra era de contado. Reordenar eliminó la causa; agregar advertencias al prompt solo la compensaba y desplazaba errores a otros campos.
+- **"Tengo como 0 millones, ¿alcanza para la inicial?"** La definición inicial decía `SI` con monto 0, aplicando el principio de reportar literal. Pero `manifesto_cuota_inicial` no es un campo literal: es una categoría que cruza con el histórico, donde `SI` cierra 10,9 % contra 7,0 %. Un cliente con cero pesos pertenece al grupo de los que no tienen inicial, y ponerlo del otro lado contamina la variable calibrada.
+  - v5 cambió la **definición de negocio**: `SI` exige un monto mayor que cero, y una cifra de cero es `NO`.
+  - El acierto sobre los 35 casos pasó de ~30 % a **97 %** (68 de 70 llamadas).
+  - La muestra de 10 escondía el problema por azar. Apareció al medir el subconjunto completo.
+- **"No tengo inicial" sin forma de pago se resuelve aguas abajo, no con otra versión del prompt.** Si el tema de la inicial salió y el LLM dejó `forma_pago = no_informa`, el score usa `credito`: nadie que pague de contado dice "no tengo inicial". Es una regla derivada, con test, registrada en los factores del lead (28 leads). La salida del LLM queda intacta y la corrección es auditable.
+- **El SKU del formulario no sirve para validar el de la conversación.** Crucé las dos fuentes esperando validación cruzada. En 590 leads coinciden el 3,6 %, contra 4,1 % esperado por azar con las distribuciones reales de cada una.
+  - La coincidencia no supera el azar: en estos datos las dos señales son independientes (probablemente un artefacto del generador sintético) y no puedo usar una para validar la otra.
+  - No es un error de extracción: sin LLM, el primer modelo que nombra el cliente da la misma coincidencia.
+  - Por eso el acierto de la extracción se mide contra un set etiquetado a mano, no contra el formulario.
+  - **El score usa el SKU de la conversación cuando existe**, porque lo que el cliente pide por escrito es evidencia más rica que un campo de formulario. Se guardan los dos y el tablero muestra ambos cuando difieren.
+
 ## Supuestos
 
 - **`FECHA_REFERENCIA`, no `now()`.** La validación de fechas futuras (y más adelante la urgencia del score) usa la máxima fecha inequívoca del dataset (2026-09-14), configurable por variable de entorno. El dataset es un corte estático: con la fecha del sistema, `normalize` daría resultados distintos según el día en que se corra. En operación real la referencia sería la fecha de ejecución.

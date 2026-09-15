@@ -255,13 +255,73 @@ No las revises ni las cambies sin decírmelo.
 
 ## Extracción con IA
 
-Schema estricto, todos los campos nullable. Tres campos usan **exactamente los valores del histórico** para poder cruzarlos:
+Schema JSON estricto en `backend/llm/schemas.py`. Tres campos usan **los valores del histórico** para poder cruzarlos:
 
-- `forma_pago`: `contado` | `credito` | `no_informa`
+- `forma_pago`: `contado` | `credito` | `no_informa` (histórico: `forma_pago_declarada`)
 - `manifesto_cuota_inicial`: `SI` | `NO` | `NO_INFORMA`
-- `pidio_cita`: boolean
+- `pidio_cita`: `SI` | `NO` | `NO_INFORMA` — **no es boolean**: en el histórico vale `SI`/`NO`
 
-Más: `modelo_interes_mencionado`, `sku_resuelto`, `cuota_inicial_cop`, `pidio_cotizacion`, `intencion_declarada`, `objecion_principal`, `confianza`, `justificacion` (≤200 chars, cita textual del fragmento que sustenta la extracción).
+**`NO_INFORMA` es su propia categoría, nunca se convierte en `NO`.** El histórico de `pidio_cita` solo tiene `SI`/`NO` porque ahí el dato ya está registrado; una conversación puede simplemente no tocar el tema. Qué peso recibe `NO_INFORMA` lo decide el score, no la extracción. `pidio_cotizacion` sigue la misma regla (`SI` | `NO` | `NO_INFORMA`) e `intencion_declarada` incluye `no_informa`. Los enums no son nullable: la ausencia se dice con `NO_INFORMA`, así hay una sola forma de decirlo.
+
+Resto de campos: `modelo_interes_mencionado` y `cuota_inicial_cop` (nullable), `objecion_principal`, `confianza` (0-1) y `justificacion`.
+
+`objecion_principal` incluye `sin_inicial` (no tiene para la inicial) e `historial_crediticio` (reportado, centrales, Datacrédito), separados de `cuota`, que es solo la mensualidad alta. Es información para el asesor: el histórico no tiene columna de objeción.
+
+**`confianza` no se usa para priorizar.** La autoevaluación de un LLM está mal calibrada; en la muestra de v1 solo tomó 0,8 / 0,9 / 1,0. Queda en el JSON y nada más. Como señal de riqueza de la conversación se usa **`campos_informados`**: cuántos de `forma_pago`, `manifesto_cuota_inicial`, `pidio_cita`, `pidio_cotizacion` e `intencion_declarada` salieron distintos de no informa (0 a 5). Lo calcula el código, no el modelo.
+
+**Validación de consistencia: registra, no corrige** (`backend/llm/validacion.py`). Si el código reescribe la salida, se pierde la medida de cuánto se equivoca el modelo. Las reglas del prompt verificables en código se chequean y las violaciones quedan en `payload.violaciones` y en el resumen de la etapa: `contado_con_cuota_inicial`, `monto_sin_manifestar_inicial`, `inicial_cero_marcada_como_si`, `justificacion_no_literal_del_cliente`. Cero violaciones prueba consistencia, no acierto: el acierto se mide contra el set etiquetado a mano, **nunca contra el SKU del formulario** (ver abajo). Los derivados (`sku_resuelto`, `campos_informados`, `violaciones`) se recalculan en cada corrida sin llamar a la API.
+
+### Reglas derivadas en el score (decididas el día 3)
+
+La salida del LLM en `extracciones_ia` nunca se modifica. Cuando el score necesita un valor distinto, lo calcula con una regla derivada en `backend/stages/score.py` y registra el nombre de la regla en `scores.factores`.
+
+- **`forma_pago_para_score`:** si `manifesto_cuota_inicial` es `SI` o `NO` y `forma_pago` es `no_informa`, el score usa `credito` (regla `inicial_mencionada_implica_credito`). Nadie que pague de contado dice "no tengo inicial". Aplica a 28 leads.
+- **`sku_para_score`:** el score usa el SKU de la conversación cuando existe y el del formulario como respaldo. Se guardan ambos y **el tablero muestra los dos cuando difieren**.
+
+**El SKU del formulario y el de la conversación son independientes en estos datos:** coinciden 3,6 % contra 4,1 % esperado por azar. No se usa uno para validar el otro. No escribir en ningún lado que "los clientes pidieron algo distinto": es un artefacto del generador sintético, no una afirmación de negocio que los datos sostengan.
+
+### Qué campos tienen calibración contra el histórico
+
+Esto decide qué puede pesar en el score con pesos derivados de la regresión.
+
+| Campo | Columna del histórico | ¿Calibrable? |
+|---|---|---|
+| `forma_pago` | `forma_pago_declarada` | Sí |
+| `manifesto_cuota_inicial` | `manifesto_cuota_inicial` | Sí |
+| `pidio_cita` | `pidio_cita` (`SI`/`NO`) | `SI` y `NO` sí. `NO_INFORMA` no existe en el histórico: su tratamiento es criterio propio |
+| `sku_resuelto` | `modelo_cotizado`, `precio_lista` | Sí, a través del precio o segmento del modelo |
+| `cuota_inicial_cop` | — | No: no hay columna de monto |
+| `pidio_cotizacion` | — | No |
+| `intencion_declarada` | — | No |
+| `objecion_principal` | — | No, es información para el asesor |
+| `campos_informados` | — | No |
+| `confianza` | — | No, y no se usa |
+
+Lo no calibrable solo entra al score como ajuste de criterio propio, declarado como tal en `factores` y en el README.
+
+### Versiones del prompt
+
+- `extraccion_v1`: primera versión. La muestra de 10 mostró: dinero de contado tomado como cuota inicial, `NO` con monto a la vez, "¿No tienen usadas?" sin clasificar como `precio`, y un ejemplo mal puesto en `pidio_cotizacion`.
+- `extraccion_v2`: los arreglos van en el prompt, no en código. Reglas explícitas de inicial vs. contado, de inicial → `credito`, `precio` definido por significado y no con frases literales, y los dos valores nuevos de objeción.
+
+  Resultado en la muestra: 0 violaciones, pero 4 regresiones de `NO_INFORMA` a `NO`/`SI` en `pidio_cita` y `pidio_cotizacion`, porque cada advertencia sobre un campo empuja al modelo a pronunciarse sobre él.
+- `extraccion_v3`: la mitad de largo que v2 (494 palabras contra 986). Solo definiciones, sin advertencias ni casos límite; `NO` exige que el tema se haya mencionado y el cliente lo haya rechazado con palabras.
+
+- `extraccion_v4`: v3 + **schema reordenado** (`forma_pago → manifesto_cuota_inicial → cuota_inicial_cop`) + "dice que" en `comparando`. El modelo escribe el JSON en el orden de las propiedades: un campo que depende de otro va después de él en el schema. 
+- `extraccion_v5`: **corrección de una definición de negocio, no un arreglo del prompt.** `manifesto_cuota_inicial = SI` exige un monto mayor que cero y una cifra de cero es `NO`, porque es la categoría que cruza con el histórico. `cuota_inicial_cop` conserva el literal (0). Es la versión de la corrida completa.
+
+Todas se conservan en `prompts/`. Resultados, medición de ruido y errores aceptados: `docs/validacion.md`.
+
+**Antes de atribuir una mejora al prompt, se mide el ruido** con `python -m backend.cli medir-ruido`. Una diferencia entre versiones dentro de la variabilidad de llamadas idénticas no cuenta como efecto del cambio. El hash incluye la versión, así que cada una tiene su propia caché.
+
+Reglas del prompt que no se negocian:
+- **Solo cuentan las declaraciones del cliente.** Lo que dice el asesor es contexto; si el cliente no lo confirma, no es señal.
+- **`justificacion` es cita textual del cliente** (≤200 chars, fragmentos separados por ` | `), nunca resumen. Es la defensa contra alucinación en la demo.
+- **`modelo_interes_mencionado` es lo que escribió el cliente, sin normalizar ni completar.** `sku_resuelto` no lo produce el LLM: se calcula después con la cascada de `resolve-models` y se guarda con `sku_match_method` en el mismo `payload`.
+
+### `cuota_inicial_cop` no tiene fuente de calibración
+
+El histórico solo trae `manifesto_cuota_inicial` (`SI`/`NO`/`NO_INFORMA`), **sin ninguna columna de monto**. Si el monto entra al score, es por criterio propio y se declara así en `factores` y en el README, separado de los pesos derivados de la regresión. No se mezcla con ellos ni se presenta como calibrado.
 
 El prompt vive en `prompts/extraccion_v1.md`, versionado. Nunca hardcodeado. Guardar `prompt_version` y `modelo_llm` en cada fila de `extracciones_ia`.
 
