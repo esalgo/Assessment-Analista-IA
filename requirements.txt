@@ -1,29 +1,37 @@
+# Versiones fijadas con ==: las mismas que corrieron en el contenedor donde se
+# verificó el pipeline completo (2026-09-15). Sin fijar, el build del VPS
+# instalaría las últimas del día y podría romper algo que ya funcionaba.
+
 # --- API ---
 # [standard] trae uvicorn y el comando `fastapi` (dev/run)
-fastapi[standard]
-pyjwt
+fastapi[standard]==0.141.1
+pyjwt==2.14.0
 # bcrypt directo, sin passlib: passlib 1.7.4 falla con bcrypt 5 al detectar el backend.
 bcrypt==5.0.0
 
 # --- Base de datos ---
 # psycopg3 con binarios precompilados. Sin ORM: SQL crudo.
-psycopg[binary,pool]
+# psycopg-pool se fija aparte: la API la importa directamente.
+psycopg[binary,pool]==3.3.5
+psycopg-pool==3.3.1
 
 # --- Pipeline de datos ---
-pandas
-rapidfuzz
+pandas==3.0.5
+rapidfuzz==3.14.6
+# Se importa directamente en backend/scoring; fijarla evita que cambie la aritmética de los pesos.
+numpy==2.5.3
 
 # --- Scoring ---
 # Solo para derivar los pesos del histórico. El score en runtime
 # es una suma de enteros, no una llamada al modelo.
-scikit-learn
+scikit-learn==1.9.1
 
 # --- LLM ---
-openai
+openai==3.14.0
 
 # --- CLI y configuración ---
-typer
-python-dotenv
+typer==0.27.2
+python-dotenv==1.2.3
 
 # --- Tests ---
-pytest
+pytest==9.1.1

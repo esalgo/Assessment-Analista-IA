@@ -81,7 +81,8 @@ services:
       GENERIC_TIMEZONE: America/Bogota
       TZ: America/Bogota
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
-      PIPELINE_TOKEN: ${PIPELINE_TOKEN}
+      # Sin PIPELINE_TOKEN: n8n 2.x bloquea {{$env...}} en los nodos. El token
+      # va en una credencial Header Auth, cifrada con N8N_ENCRYPTION_KEY.
       # Sin N8N_BASIC_AUTH_*: no existe en la rama 2.x.
       # La auth es la cuenta de propietario del primer acceso.
       # n8n guarda su estado en SQLite dentro del volumen n8n_data.

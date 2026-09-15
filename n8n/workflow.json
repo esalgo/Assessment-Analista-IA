@@ -1,0 +1,65 @@
+{
+  "id": "PipelineLeads001",
+  "name": "Pipeline diario de leads",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "5f0c1a52-7c1e-4f0b-9a51-6a0d7f3e2b01",
+      "name": "Todos los días 6:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://api:8000/pipeline/run",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "8b3d2e61-4a9f-4c2d-8e7a-1f5b6c9d0e02",
+      "name": "POST /pipeline/run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "pipelineTokenHeader",
+          "name": "X-Pipeline-Token"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Todos los días 6:00": {
+      "main": [
+        [
+          {
+            "node": "POST /pipeline/run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Bogota",
+    "saveManualExecutions": true
+  },
+  "pinData": {}
+}
