@@ -53,8 +53,6 @@ CREATE POLICY aisla_empresa ON <tabla>
 
 **El `FORCE` no es opcional.** El dueño de una tabla está exento de sus propias políticas por defecto, y la API se conecta con el mismo usuario que creó el esquema. Sin `FORCE`, las políticas se ignoran en silencio: las consultas devuelven todo, no hay ningún error y el aislamiento es puro teatro. Es el fallo más caro posible en este proyecto.
 
-**`FORCE` tampoco basta solo.** La imagen de Postgres crea `POSTGRES_USER` como **superusuario**, y un superusuario (o un rol con `BYPASSRLS`) se salta RLS siempre, con o sin `FORCE`. Por eso `004_rls.sql` crea el rol `app_tenant` (`NOLOGIN NOSUPERUSER NOBYPASSRLS`, sin ser dueño de ninguna tabla) y la API hace `SET LOCAL ROLE app_tenant` en cada transacción. El pipeline batch (CLI) sigue como superusuario a propósito: procesa las tres empresas.
-
 Las tablas que **no** llevan RLS: `usuarios` (ver abajo, es un caso especial), `motos`, `marcas`, `inventario_pv`, `ciudades`, `empresas`, `puntos_venta`, `historico_cierres`, `score_pesos` y todas las `raw_*`. Son referencia compartida o analítica; poner RLS en `inventario_pv` rompe el join de disponibilidad.
 
 ### Tabla `usuarios`
@@ -85,23 +83,44 @@ Tabla `usuarios` sembrada con `empresa_id`, `asesor_id` y contraseña hasheada. 
 ```python
 async def db_sesion(token: str = Depends(oauth2)):
     claims = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-    async with pool.connection() as conn:
+    async with pool.connection() as conn:   # la pool se crea con autocommit=True
         async with conn.transaction():
+            await conn.execute("SET LOCAL ROLE app_tenant")
             await conn.execute(
                 "SELECT set_config('app.empresa_id', %s, true)",
                 (claims["empresa_id"],),
             )
-            await conn.execute("SET LOCAL ROLE app_tenant")
             yield conn
 ```
 
-El tercer argumento `true` de `set_config` lo hace local a la transacción, igual que `SET LOCAL ROLE`: al cerrar la transacción ambos se deshacen y no se filtran al siguiente request que reutilice esa conexión de la pool.
+Dos cosas que hacen que esto funcione, y ninguna es opcional:
 
-**Las conexiones deben estar en `autocommit=True`.** Sin autocommit, psycopg abre una transacción implícita con la primera consulta y todo `with conn.transaction()` posterior es solo un **savepoint** dentro de ella. `SET LOCAL` y `set_config(..., true)` duran hasta el fin de la transacción *externa*, no del savepoint: el contexto del tenant (empresa y rol) sobrevive al request y el siguiente que use esa conexión ve datos de otra empresa. Verificado en la prueba del esquema: sin autocommit, una sesión sin empresa fijada devolvió las filas de la empresa anterior y `current_user` seguía siendo `app_tenant`. `backend/db/conexion.py` ya conecta así; la pool de la API debe hacer lo mismo (`kwargs={"autocommit": True}`).
+**`SET LOCAL ROLE app_tenant`.** Postgres ignora RLS para superusuarios, con `FORCE` o sin él, y el `POSTGRES_USER` de la imagen oficial es superusuario. `FORCE` solo cubre al dueño de la tabla. Por eso la migración crea `app_tenant`, un rol sin login, sin superusuario con `SELECT/INSERT/UPDATE/DELETE` sobre las tablas operacionales, y cada request baja a ese rol dentro de la transacción. Al terminar, el rol vuelve al original.
+
+**La pool se abre con `autocommit=True`.** Sin autocommit, la primera consulta abre una transacción implícita y los `with conn.transaction()` siguientes son solo savepoints: `SET LOCAL ROLE` y `set_config(..., true)` siguen vigentes en el request siguiente que reutilice esa conexión. Eso es una filtración de contexto entre empresas por ciclo de vida de conexión, no por un fallo de las políticas. Verificado en la prueba del día 1.
+
+`GRANT USAGE ON SCHEMA public TO app_tenant` además de los `GRANT` sobre las tablas, o todo falla con un error de permisos que no menciona el esquema.
+
+`POST /auth/login` consulta `usuarios` cuando todavía no se sabe la empresa: ese endpoint no hace `SET LOCAL ROLE`, o `app_tenant` necesita `SELECT` sobre `usuarios`. Decídelo explícitamente.
+
+**El pipeline NO baja de rol.** El CLI corre como superusuario a propósito, porque escribe leads de las tres empresas a la vez. Solo la API cambia a `app_tenant`.
+
+`app_tenant` lleva permisos de escritura a propósito, no solo `SELECT`: así un `INSERT` cruzado falla con `violates row-level security policy` en vez de `permission denied`. El primero demuestra que la política funciona; el segundo solo demostraría que el `GRANT` funciona.
 
 ### Test obligatorio
 
-Insertar leads de dos empresas, abrir sesión con `app.empresa_id = 'EMP-01'` y verificar que `SELECT count(*) FROM leads` devuelve solo los de esa empresa. Sin ese test, el aislamiento no está probado.
+El test tiene que pasar por el mismo camino que la API: abrir transacción, `SET LOCAL ROLE app_tenant`, fijar `app.empresa_id` y contar. Si corre como superusuario pasa siempre y no prueba nada.
+
+Resultado esperado, con 3 leads sembrados (2 de EMP-01, 1 de EMP-02):
+
+| Contexto | `count(*)` |
+|---|---|
+| superusuario, sin cambiar de rol | 3 (se salta RLS) |
+| `app_tenant` + `EMP-01` | 2 |
+| `app_tenant` + `EMP-02` | 1 |
+| `app_tenant` sin empresa fijada | 0 |
+
+Probar también escritura: un `INSERT` de un lead de otra empresa debe fallar con `violates row-level security policy`, y un `UPDATE` sobre un lead ajeno debe afectar 0 filas.
 - **La deduplicación de clientes usa la clave `(empresa_id, telefono_normalizado)`**, nunca el teléfono solo
 
 ## Anomalías conocidas de los datos
@@ -111,7 +130,7 @@ Ya verificadas. No hay que redescubrirlas, hay que manejarlas.
 ### leads.csv (1.503 filas)
 - **Teléfonos en formatos mixtos**: `3114997487`, `+57 322 1743999`, `302-683-4394`, `(315) 149-8889`, `573223242028`, y **151 con espacios sobrantes** al inicio o final. Normalizar a 10 dígitos: quitar todo lo que no sea dígito y el `57` inicial cuando el resultado tiene 12. Todos son recuperables **salvo uno** (`300123`, 6 dígitos) → `telefono_valido = false`, fuera del dedupe.
 - **Cuatro formatos de fecha conviviendo en la misma columna**: `yyyy-mm-dd HH:MM:SS`, `xx/xx/yyyy HH:MM`, `dd-mm-yyyy`, e ISO con `T`. Parser en cascada.
-- **96 fechas `mm/dd/yyyy` inequívocas** en `fecha_primer_contacto` (día > 12), más 309 ambiguas donde ambos campos son ≤ 12. Validación: si `fecha_primer_contacto < fecha_registro` o la fecha cae en el futuro, reintentar con el formato alterno.
+- **El formato con barras mezcla dd/mm y mm/dd de verdad**, no es uno con excepciones. Ver la sección siguiente.
 - `canal`: 9 variantes de capitalización → enum de 3
 - `estado_gestion`: 10 variantes → enum de 6
 - `ciudad`: 37 variantes, 79 nulos. Bogotá aparece como `Bogotá D.C.`, `Bogotá`, `Bogota`, `BOGOTA`, `bogotá`, `Bogota DC`. También `Rio Negro`/`Rionegro` y `Cartagena`/`Cartagena de Indias`.
@@ -120,6 +139,64 @@ Ya verificadas. No hay que redescubrirlas, hay que manejarlas.
 - **Nombres**: 281 con espacios al inicio o final, 305 en TODO MAYÚSCULAS, 24 en minúsculas, 21 abreviados (`Y. Castaño Valencia`). Normalizar a Title Case sobre el nombre recortado.
 - **67 filas con la marca mal escrita** en `modelo_interes_texto`: `Hnda`, `Bajai`, `Heroo`, `Suzuky`. El fuzzy match las resuelve; el match exacto no.
 - **Match exacto marca+línea cubre solo 925 de 1.423** modelos no nulos. Las otras 498 (solo-marca, typos, doble espacio, minúsculas, `A.K.T`) van al fuzzy.
+
+### Fechas con barras: dd/mm y mm/dd conviven
+
+| | dd/mm inequívoco | mm/dd inequívoco | ambiguo (ambos ≤12) |
+|---|---|---|---|
+| `fecha_registro` | 204 | **59** | 265 |
+| `fecha_primer_contacto` | 96 | **93** | 216 |
+
+Un default fijo con reintento está mal: en `fecha_registro` no hay contra qué comparar y los 59 mm/dd quedarían mal leídos en silencio.
+
+**Resolución: cascada con ventana derivada.** Las 974 fechas de formato inequívoco caen todas entre el 1 de agosto y el 10 de septiembre de 2026 (solo meses 8 y 9). Para cada fecha ambigua se prueban las dos lecturas y se descarta la que caiga fuera de esa ventana. En `fecha_primer_contacto` se descartan además las anteriores al registro; si quedan dos, gana la más cercana al registro.
+
+Rendimiento medido: resuelve 214 de 265 en `fecha_registro` (157 a dd/mm, **57 a mm/dd**) y 163 de 216 en `fecha_primer_contacto` (78 a dd/mm, **85 a mm/dd**).
+
+Quedan 51 y 53 donde ambas lecturas caen en la ventana, pero **de esas, 22 y 23 tienen día igual a mes** (`08/08/2026`): las dos lecturas dan la misma fecha, así que no son ambiguas.
+
+Estado final tras la cascada completa:
+
+| | sin resolver | resueltos por heurística, marcados |
+|---|---|---|
+| `fecha_registro` | **22** (default dd/mm + flag) | 7 por `coherencia` |
+| `fecha_primer_contacto` | 0 | **14** por `mas_cercana` |
+
+`mas_cercana` no es evidencia, es un desempate: sesga hacia contactos más rápidos, que es justo la variable que más predice cierre. Son 14 de 1.500, así que el efecto agregado es despreciable, pero esos leads llevan confianza baja y **no entran al set de validación del score**.
+
+**El default dd/mm sale de los datos** (204 inequívocos contra 59 en `fecha_registro`), no de la convención colombiana. Ese es el argumento que va al README.
+
+**La ventana se calcula, no se escribe a mano.** Va desde la mínima fecha inequívoca menos 7 días hasta `FECHA_REFERENCIA`, sin margen por arriba porque nada puede ser posterior al corte. Márgenes de 0 a 7 días dan el mismo resultado (probado). Un número mágico deja de funcionar con otro corte de datos y es peor de defender.
+
+Guardar por fecha el método que la resolvió y sacar los conteos en el log del pipeline: los 57 mm/dd de `fecha_registro` son la evidencia de que la trampa existía.
+
+### Contactos sin hora (208 filas)
+
+Los contactos en formato `dd-mm-yyyy` no traen hora. Comparar contra un `00:00` inventado producía 61 falsas inconsistencias de "contacto antes del registro".
+
+- Columna **`fecha_contacto_sin_hora`** para que el scoring no calcule horas transcurridas sobre una medianoche que nadie observó
+- Cuando falta la hora, la comparación con el registro es **por día de calendario**: el mismo día no es inconsistencia
+- El desempate del registro por `coherencia` solo usa contactos **inequívocos**, y una diferencia de calendario real; un contacto sin hora el mismo día nunca descarta una lectura
+
+Resultado: `contacto_antes_registro` pasa de 62 a 0. **Ojo al interpretarlo:** para los leads resueltos por `coherencia` ese cero está garantizado por construcción, porque se eligió la lectura que dejaba el contacto compatible. La validación independiente son los leads que no pasaron por coherencia.
+
+### `FECHA_REFERENCIA`: nunca `now()`
+
+La validación de "fecha en el futuro" y el multiplicador de urgencia del score usan una `FECHA_REFERENCIA` configurable, **por defecto el máximo de las fechas inequívocas del dataset**, no la fecha del sistema. Ese máximo es **`2026-09-14 01:35`**, y sale de `fecha_primer_contacto`; el máximo de `fecha_registro` es el 10 de septiembre, así que hay que mirar ambas columnas.
+
+Dos razones. Idempotencia: con `now()` el resultado de `normalize` cambia según el día en que se corra. Y la demo: si la urgencia usa la fecha real, en tres semanas todos los leads estarán aplastados contra el piso del decay y el tablero dejará de diferenciar nada.
+
+Va al README como supuesto explícito: el dataset es un corte estático y en operación real la referencia sería la fecha de ejecución.
+
+### Cuarentena
+
+Una sola tabla `cuarentena` con clave única `(etapa, origen, clave, motivo)`. Cada etapa borra **sus propias** filas (acotado por `etapa`, nunca un `TRUNCATE`) y las reescribe, así la tabla siempre refleja la última corrida.
+
+**La regla es genérica, no hecha a la medida de una fila**: va a cuarentena toda fila con `fecha_registro` imposible o sin `canal`, porque no es un lead utilizable. Hoy solo la cumple `LD-01501`, y esa coincidencia es del dataset, no de la regla.
+
+Dos precisiones:
+- **"Imposible" es día 33, no "fuera de la ventana".** Una fecha parseable pero rara se marca con un flag, no se descarta. Si confundes las dos, botas leads buenos.
+- El `motivo` registrado debe ser específico (`fecha_registro imposible: 2026-08-33`, `canal nulo`), no un genérico "fila inválida".
 
 ### Las tres últimas filas de leads.csv están plantadas
 
@@ -135,7 +212,7 @@ Detectar y reportar estas tres es barato y demuestra que validaste en vez de con
 - **73 grupos cruzan canal** → fusionar (lo pide el punto 2 del alcance)
 - **91 grupos cruzan empresa** → **NO fusionar** (lo prohíbe el punto 8)
 
-Al fusionar: conservar el `lead_id` más antiguo como canónico, acumular canales en array, registrar los absorbidos en `leads_fusionados`.
+Al fusionar: conservar el `lead_id` más antiguo como canónico y acumular canales en `canales text[]`. Los absorbidos se quedan en `leads` con `lead_canonico_id` y `motivo_fusion`. **No existe tabla `leads_fusionados`** (ver decisión 3 abajo).
 
 ### conversaciones.json (677)
 - **12** referencian `lead_id` que no existen en leads.csv → cuarentena, no romper el pipeline
@@ -163,6 +240,19 @@ Separador `,` (coma), encoding UTF-8 **sin BOM**, saltos de línea CRLF. `asesor
 
 El paquete incluye un `LEEME.txt` que confirma estas convenciones. Léelo antes de escribir el parser.
 
+## Decisiones de modelado ya tomadas (día 1)
+
+No las revises ni las cambies sin decírmelo.
+
+1. **`canal`** guarda los valores del histórico (`WhatsApp`, `Meta Ads`, `Formulario Web`) para cruzar directo con `historico_cierres`.
+2. **`estado_gestion`** en snake_case (`sin_gestion`, `cotizacion_enviada`…). El motivo es preferir identificadores sin tildes ni espacios en la base; la forma de presentación se resuelve en el frontend.
+3. **Dedupe:** los leads absorbidos se quedan en `leads` con `lead_canonico_id` apuntando al canónico, que acumula `canales text[]`. No hay tabla `leads_fusionados`. Además, columna **`motivo_fusion`** con la regla que disparó y su confianza: sin eso no hay trazabilidad de por qué se fusionaron dos leads.
+4. **`cuarentena`** es una sola tabla con clave única `(etapa, origen, clave, motivo)`.
+5. **`extracciones_ia`** tiene clave `(lead_id, conversacion_hash)`. Solo el hash chocaría entre dos leads con el mismo texto.
+6. **`temperatura`** restringida a `alta` / `media` / `baja`. `score_pesos` se crea el día 3, cuando existan los pesos.
+7. **El pipeline corre sin RLS**, como superusuario, a propósito. Solo la API baja a `app_tenant`.
+8. **Mensajes:** se reemplazan enteros por conversación, para que no queden sobrantes si el archivo trae menos.
+
 ## Extracción con IA
 
 Schema estricto, todos los campos nullable. Tres campos usan **exactamente los valores del histórico** para poder cruzarlos:
@@ -188,10 +278,16 @@ Referencia medida: AUC 0.619 en CV5. El decil alto llega a 15,5 % de cierre (lif
 ## Etapas del pipeline
 
 ```
-ingest → normalize → resolve-models → dedupe → extract-ai → score → assign
+ingest → load-reference → normalize → resolve-models → dedupe → extract-ai → score → assign
 ```
 
 Cada una es un subcomando del CLI y corre sola. `run-all` las encadena.
+
+**`load-reference` es una etapa propia, no parte de `normalize`.** Carga `empresas`, `puntos_venta`, `marcas`, `motos`, `inventario_pv`, `asesores` e `historico_cierres` desde las tablas `raw_*`. Son cosas distintas: la referencia es un upsert de catálogos que llegan limpios; `normalize` es parseo en cascada, cuarentena y flags. Y hay una dependencia dura, porque `leads` tiene llaves foráneas a `puntos_venta`, `motos` y `ciudades`: como etapa propia esa dependencia es explícita, escondida dentro de `normalize` es solo un orden de instrucciones que alguien puede reordenar.
+
+Dos matices:
+- **`historico_cierres` no es referencia, es analítica.** Se carga aquí por comodidad, pero solo la consume el entrenamiento del score. No se cruza con los leads del día.
+- **`ciudades` no sale de ningún archivo**: se construye a partir de las 37 variantes. Va como datos semilla en una migración, no en esta etapa.
 
 ```bash
 # entorno Python
@@ -258,7 +354,7 @@ No busques cobertura alta. Cubre los casos raros:
 - `Hnda CB 190R` → resuelve al SKU de Honda CB 190R por fuzzy
 - Conversación WhatsApp sobre un lead de canal Meta Ads → se procesa igual, no se descarta
 - Fecha `08/15/2026` → 15 de agosto, no falla
-- Fecha `09/12/2026` ambigua → resuelta por coherencia con `fecha_registro`
+- Fecha `09/12/2026` → la ventana la resuelve antes de llegar a la coherencia, porque diciembre queda fuera. Usa fechas distintas para cubrir los dos métodos por separado.
 - Los cuatro formatos (`2026-08-29 22:58:00`, `19/08/2026 17:40`, `09-08-2026`, `2026-08-24T14:11:00`) parsean correctamente
 - Duplicado cross-canal → fusionado
 - Duplicado cross-empresa → **NO** fusionado

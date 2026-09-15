@@ -1,6 +1,7 @@
 """Configuración leída de variables de entorno (y del .env en local)."""
 
 import os
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -9,6 +10,13 @@ load_dotenv()
 
 RAIZ = Path(__file__).resolve().parent.parent
 MIGRACIONES_DIR = RAIZ / "db" / "migrations"
+
+
+def fecha_referencia_configurada() -> date | None:
+    """FECHA_REFERENCIA (yyyy-mm-dd) si está definida. Si no, cada etapa usa
+    la máxima fecha inequívoca del dataset. Nunca la fecha del sistema."""
+    valor = os.getenv("FECHA_REFERENCIA")
+    return date.fromisoformat(valor) if valor else None
 
 
 def data_input_dir() -> Path:

@@ -4,6 +4,9 @@ import typer
 
 from backend.db.migrar import aplicar_migraciones
 from backend.stages.ingest import ErrorDeFormato, ingestar
+from backend.stages.load_reference import ErrorDeReferencia, cargar_referencia
+from backend.stages.normalize import ErrorDeCatalogo, normalizar
+from backend.stages.resolve_models import resolver_modelos
 
 app = typer.Typer(help="Pipeline de priorización de leads.", no_args_is_help=True)
 
@@ -36,16 +39,38 @@ def ingest() -> None:
         typer.echo(f"[ingest] {r.archivo:<22} -> {r.tabla:<19} {r.filas:>5} filas  ({estado})")
 
 
+@app.command("load-reference")
+def load_reference() -> None:
+    """Carga empresas, puntos de venta, catálogo, asesores e histórico desde raw_*."""
+    try:
+        conteos = cargar_referencia()
+    except ErrorDeReferencia as error:
+        typer.echo(f"[load-reference] ERROR: {error}", err=True)
+        raise typer.Exit(code=1)
+    for tabla, filas in conteos.items():
+        typer.echo(f"[load-reference] {tabla:<20} {filas:>5}")
+
+
 @app.command()
 def normalize() -> None:
     """Normaliza fechas, teléfonos, ciudad, canal, estado y nombres."""
-    _pendiente("normalize")
+    try:
+        resultado = normalizar()
+    except ErrorDeCatalogo as error:
+        typer.echo(f"[normalize] ERROR: {error}", err=True)
+        raise typer.Exit(code=1)
+    assert resultado.ventana is not None
+    typer.echo(f"[normalize] ventana de fechas {resultado.ventana[0]} a {resultado.ventana[1]}")
+    typer.echo(f"[normalize] fecha_referencia {resultado.fecha_referencia}")
+    for nombre, cantidad in sorted(resultado.conteos.items()):
+        typer.echo(f"[normalize] {nombre:<40} {cantidad:>5}")
 
 
 @app.command("resolve-models")
 def resolve_models() -> None:
     """Resuelve modelo_interes_texto a un SKU del catálogo."""
-    _pendiente("resolve-models")
+    for metodo, cantidad in resolver_modelos().most_common():
+        typer.echo(f"[resolve-models] {metodo:<15} {cantidad:>5}")
 
 
 @app.command()
@@ -76,6 +101,7 @@ def assign() -> None:
 def run_all() -> None:
     """Ejecuta todas las etapas en orden."""
     ingest()
+    load_reference()
     normalize()
     resolve_models()
     dedupe()
