@@ -1,0 +1,194 @@
+<header class="barra">
+  <strong>Leads del día</strong>
+  <span class="tenue">{{ sesion?.empresa_id }} · {{ esGerente ? 'Gerente' : 'Asesor ' + sesion?.asesor_id }}</span>
+  <button class="secundario" (click)="salir()">Salir</button>
+</header>
+
+@if (error()) {
+  <p class="error aviso">{{ error() }}</p>
+}
+
+@if (esGerente) {
+  <section class="gerente">
+    <label>
+      Asesor
+      <select #selector (change)="elegirAsesor(selector.value)">
+        @for (a of asesores(); track a.asesor_id) {
+          <option [value]="a.asesor_id" [selected]="a.asesor_id === asesorId()">
+            {{ a.punto_venta_id }} · {{ a.nombre }}
+          </option>
+        }
+      </select>
+    </label>
+
+    <details>
+      <summary>Días de cartera por punto de venta</summary>
+      <p class="tenue">
+        Cuántos días tardan los asesores activos en atender a todos los clientes activos (primer contacto + seguimiento).
+      </p>
+      <div class="desliza">
+        <table>
+          <thead>
+            <tr>
+              <th>Punto de venta</th>
+              <th class="num">Asesores activos (inactivos)</th>
+              <th class="num">Capacidad diaria</th>
+              <th class="num">Pendientes</th>
+              <th class="num">Seguimiento</th>
+              <th class="num">Días de cartera</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (r of resumen(); track r.punto_venta_id) {
+              <tr>
+                <td>{{ r.punto_venta_id }}</td>
+                <td class="num">{{ r.asesores_activos }} ({{ r.asesores_inactivos }})</td>
+                <td class="num">{{ r.capacidad_diaria }}</td>
+                <td class="num">{{ r.pendientes }}</td>
+                <td class="num">{{ r.seguimiento }}</td>
+                <td class="num"><strong>{{ r.dias_de_cartera === null ? 'sin capacidad' : decimal(r.dias_de_cartera) }}</strong></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+}
+
+<main class="tablero">
+  <section class="cola">
+    @if (cola(); as c) {
+      <h2>{{ c.asesor.nombre }} <span class="tenue">· {{ c.asesor.punto_venta_id }} · {{ c.fecha }}</span></h2>
+
+      @for (grupo of [{ titulo: 'Primer contacto', leads: primerContacto() }, { titulo: 'Seguimiento', leads: seguimiento() }]; track grupo.titulo) {
+        <h3>{{ grupo.titulo }} ({{ grupo.leads.length }})</h3>
+        @if (grupo.leads.length === 0) {
+          <p class="tenue">Sin clientes en esta cola hoy.</p>
+        } @else {
+          <table class="filas">
+            <thead>
+              <tr>
+                <th class="num">#</th>
+                <th>Cliente</th>
+                <th class="num">Score</th>
+                <th>Temperatura</th>
+                <th>Estado</th>
+                <th class="num">Espera</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (lead of grupo.leads; track lead.lead_id) {
+                <tr (click)="abrir(lead)" [class.activa]="lead.lead_id === seleccionado()">
+                  <td class="num">{{ lead.orden }}</td>
+                  <td>
+                    {{ lead.nombre_cliente }}
+                    <div class="tenue">{{ lead.canal }}@if (lead.sin_senal_conversacional) { · sin conversación }</div>
+                  </td>
+                  <td class="num"><strong>{{ lead.score }}</strong></td>
+                  <td><span class="temp" [attr.data-t]="lead.temperatura">{{ lead.temperatura }}</span></td>
+                  <td>{{ estado(lead.estado) }}</td>
+                  <td class="num">{{ tiempo(lead.horas_transcurridas) }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      }
+    } @else {
+      <p class="tenue">Cargando cola…</p>
+    }
+  </section>
+
+  <aside class="detalle">
+    @if (detalle(); as d) {
+      <h2>{{ d.nombre_cliente }}</h2>
+      <p class="tenue">{{ d.cliente_id }} · {{ d.telefono }}@if (d.email) { · {{ d.email }} }</p>
+
+      @if (d.score; as s) {
+        <p class="puntaje">
+          Score <strong>{{ s.score }}</strong>
+          <span class="temp" [attr.data-t]="s.temperatura">{{ s.temperatura }}</span>
+          <span class="tenue">{{ estado(s.estado) }}</span>
+        </p>
+
+        <h3>Por qué este score</h3>
+        @if (s.sin_senal_conversacional) {
+          <p class="tenue">Sin conversación: no hay señales que sumen o resten. El orden lo da la espera.</p>
+        }
+        <table>
+          <tbody>
+            @for (f of s.factores; track f.variable) {
+              <tr>
+                <td>
+                  {{ variable(f) }}: {{ valor(f.valor) }}
+                  @if (f.regla) {
+                    <div class="tenue">regla derivada: {{ regla(f.regla) }}</div>
+                  }
+                </td>
+                <td class="num">
+                  @if (f.multiplicador !== undefined) {
+                    ×{{ decimal(f.multiplicador, 2) }}
+                  } @else {
+                    <span [class.positivo]="f.puntos! > 0" [class.negativo]="f.puntos! < 0">
+                      {{ f.puntos! > 0 ? '+' : '' }}{{ f.puntos }}
+                    </span>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        <p class="tenue">Modelo {{ s.score_version }}. 50 = tasa base de cierre del histórico.</p>
+      }
+
+      @for (l of d.leads; track l.lead_id) {
+        <section class="lead">
+          <h3>{{ l.lead_id }} <span class="tenue">· {{ l.canal }} · {{ l.fecha_registro.slice(0, 10) }} · {{ estado(l.estado_gestion) }}</span></h3>
+
+          <table>
+            <tbody>
+              <tr [class.difieren]="l.sku.difieren">
+                <td>Moto del formulario</td>
+                <td>{{ l.sku.formulario.modelo ?? l.sku.formulario.texto ?? '—' }}</td>
+              </tr>
+              <tr [class.difieren]="l.sku.difieren">
+                <td>Moto en la conversación</td>
+                <td>{{ l.sku.conversacion.modelo ?? l.sku.conversacion.texto ?? '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+          @if (l.sku.difieren) {
+            <p class="aviso-sku">El formulario y la conversación mencionan motos distintas: confírmalo con el cliente.</p>
+          }
+
+          @if (l.extraccion; as x) {
+            <h4>Lo que dijo el cliente</h4>
+            @for (cita of citas(x.justificacion); track $index) {
+              <blockquote>“{{ cita }}”</blockquote>
+            }
+            <table>
+              <tbody>
+                <tr><td>Intención</td><td>{{ valor(x.intencion_declarada) }}</td></tr>
+                <tr><td>Forma de pago</td><td>{{ valor(x.forma_pago) }}</td></tr>
+                <tr><td>Cuota inicial</td><td>{{ valor(x.manifesto_cuota_inicial) }} · {{ pesos(x.cuota_inicial_cop) }}</td></tr>
+                <tr><td>Pidió cita</td><td>{{ valor(x.pidio_cita) }}</td></tr>
+                <tr><td>Pidió cotización</td><td>{{ valor(x.pidio_cotizacion) }}</td></tr>
+                <tr><td>Objeción principal</td><td>{{ valor(x.objecion_principal) }}</td></tr>
+              </tbody>
+            </table>
+            @if (x.violaciones.length) {
+              <p class="error">Revisar extracción: {{ x.violaciones.join(', ') }}</p>
+            }
+          } @else {
+            <p class="tenue">Este registro no tiene conversación.</p>
+          }
+        </section>
+      }
+    } @else if (seleccionado()) {
+      <p class="tenue">Cargando detalle…</p>
+    } @else {
+      <p class="tenue">Elige un cliente de la cola para ver por qué está en esa posición.</p>
+    }
+  </aside>
+</main>

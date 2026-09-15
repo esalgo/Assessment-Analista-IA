@@ -206,9 +206,44 @@ El 15 de septiembre se levantó el stack con `docker compose` sobre un Postgres 
 - Los campos que entran al score variaron en 2 de 640 leads (0,3 %).
 - Por eso **la caché importa también para la estabilidad, no solo para el costo**: reejecutar el pipeline sobre la misma base no vuelve a llamar al LLM y da exactamente el mismo resultado (verificado disparando `POST /pipeline/run`).
 
-### 1.8 Pendiente
+### 1.8 Set etiquetado a mano: acierto por campo
 
-- Set de validación etiquetado a mano con acierto por campo: es la medida de acierto de la extracción (ver 1.7).
+15 conversaciones etiquetadas leyendo el texto, **antes** de ver la salida del modelo, y elegidas por tipo de caso, no al azar: cliente que casi no habla, leads con dos conversaciones, monto en jerga ("2 millonzitos", "3000mil"), monto cero, pago de contado con cifra, objeción de historial crediticio, conversación larga y dos casos normales de control. Las etiquetas están en [`set_validacion.md`](set_validacion.md) y la medición se reproduce con:
+
+```bash
+docker compose exec api python -m backend.llm.validar_extraccion
+```
+
+El script solo compara: nunca corrige una etiqueta ni la salida guardada en `extracciones_ia`.
+
+| Campo | Acierto | % | Entra al score |
+|---|---|---|---|
+| `modelo_mencionado` | 15 / 15 | 100 | vía SKU |
+| `forma_pago` | 15 / 15 | 100 | sí |
+| `manifesto_cuota_inicial` | 13 / 15 | 87 | sí |
+| `cuota_inicial_cop` | 14 / 15 | 93 | no |
+| `pidio_cita` | 14 / 15 | 93 | sí |
+| `pidio_cotizacion` | 12 / 15 | 80 | no |
+| `intencion_declarada` | 11 / 15 | 73 | no |
+| `objecion_principal` | 11 / 15 | 73 | no |
+| **total** | **105 / 120** | **88** | |
+
+**Los campos que entran al score aciertan 42 de 45 (93 %).** Los tres campos con menos acierto (`pidio_cotizacion`, `intencion_declarada`, `objecion_principal`) son justamente los que no tienen calibración contra el histórico y cuyos errores ya se habían aceptado en 1.4. La medida confirma esa decisión en vez de contradecirla.
+
+Durante la revisión se corrigieron tres etiquetas con el monto mal transcrito (LD-00022, LD-00027 y LD-00160: la jerga "3000mil" son 3.000.000 de pesos). Las correcciones las hizo el etiquetador; el script no modifica etiquetas. Con ellas, la única discrepancia que queda en `cuota_inicial_cop` es la del monto cero, que es una diferencia de definición y no un error de lectura.
+
+**Las 15 discrepancias, por tipo:**
+
+- **Cotización inferida de un cierre (3):** LD-00018, LD-00026 y LD-00160. En las tres, nadie menciona una cotización y el modelo responde `SI`. Las citas que guarda son "¿Puedo pasar mañana a la sede a verla?" y "Listo, sepáremela": el modelo toma el cierre de la visita como si fuera una cotización pedida. Es el mismo patrón de LD-00044 en 1.4, ahora con tres casos más y con la cita textual como evidencia. Sigue sin corregirse en el prompt: v2 ya mostró que una advertencia por campo desplaza el error a otros leads.
+- **Frontera `explorando` / `comparando` (4):** LD-00020, LD-00022, LD-00068 y LD-00032. Coincide con la oscilación medida como ruido en 1.1 y 1.4. `intencion_declarada` no entra al score.
+- **Objeción (4):** LD-00058 ("¿no tienen algo más económico?" etiquetado `precio`, extraído `ninguna`), LD-00032 (`cuota`), LD-00013 y LD-00030. En LD-00030 el modelo marca `sin_inicial` ante "No tengo inicial" y la etiqueta dice `ninguna`: aquí el modelo parece más fino que el etiquetador.
+- **Definición de negocio, no error (2):** LD-00068 tiene "0 millonzitos"; la etiqueta dice `manifesto_cuota_inicial = SI` con monto `0` y el modelo responde `NO` con monto nulo. Es exactamente la definición que se corrigió en v5 (sección 1.3): una cifra de cero significa que no hay inicial. El modelo sigue la regla vigente; la etiqueta sigue el criterio anterior.
+- **Jerga de montos, sin un solo fallo del modelo:** "2 millonzitos", "3000mil", "2000mil", "2,5 millones" y "$800.000" se convirtieron correctamente a pesos. Es justo el tipo de caso que el etiquetador transcribió mal en el primer intento y tuvo que corregir: la conversión de jerga a una cifra es más difícil para una persona apurada que para el modelo.
+- **Cita nunca mencionada (1):** LD-00013, etiqueta `pidio_cita = NO`, modelo `NO_INFORMA`. Por la regla del prompt, `NO` exige que el tema se haya mencionado y el cliente lo haya rechazado, y aquí nadie habló de visitar la sede.
+
+**Dos de los fallos caen en campos que el etiquetador marcó como dudosos** (`pidio_cotizacion` en LD-00160 y `objecion_principal` en LD-00013). Donde una persona duda al etiquetar, un desacuerdo del modelo dice más sobre la ambigüedad del campo que sobre el modelo.
+
+**Límite de la medida:** 15 conversaciones elegidas por dificultad, no una muestra aleatoria. El 87 % no es una estimación del acierto sobre los 640 leads; es el acierto sobre los casos que más tensionan el schema. En una muestra aleatoria, con tantas conversaciones cortas y sin señal, saldría más alto y diría menos.
 
 ## 2. Score
 

@@ -1,1 +1,254 @@
-/* You can add global styles to this file, and also import other style files */
+/* Estilos de toda la app en un solo archivo: son dos pantallas y sin librería de componentes. */
+
+:root {
+  --fondo: #f6f7f9;
+  --superficie: #ffffff;
+  --texto: #1d2330;
+  --tenue: #647084;
+  --borde: #dde1e8;
+  --acento: #2459d6;
+  --seleccion: #e8efff;
+  --alta: #b42318;
+  --alta-fondo: #fdecea;
+  --media: #9a6700;
+  --media-fondo: #fff4d6;
+  --baja: #475467;
+  --baja-fondo: #eef0f3;
+  --positivo: #1a7f37;
+  --negativo: #b42318;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+h1, h2, h3, h4 {
+  margin: 0 0 8px;
+  line-height: 1.25;
+}
+h2 { font-size: 18px; }
+h3 { font-size: 15px; margin-top: 16px; }
+h4 { font-size: 14px; margin-top: 12px; }
+
+.tenue {
+  color: var(--tenue);
+  font-weight: normal;
+}
+
+.error {
+  color: var(--negativo);
+}
+
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border: 1px solid var(--acento);
+  border-radius: 6px;
+  background: var(--acento);
+  color: #fff;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.6; cursor: default; }
+button.secundario {
+  background: transparent;
+  color: var(--acento);
+}
+
+input, select {
+  font: inherit;
+  padding: 8px;
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  background: var(--superficie);
+  color: var(--texto);
+  max-width: 100%;
+}
+
+label {
+  display: grid;
+  gap: 4px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th, td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--borde);
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  font-size: 12px;
+  color: var(--tenue);
+  font-weight: 600;
+}
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- Login --- */
+
+.login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.login form {
+  width: 100%;
+  max-width: 340px;
+  display: grid;
+  gap: 12px;
+  padding: 24px;
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+}
+
+/* --- Tablero --- */
+
+.barra {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: var(--superficie);
+  border-bottom: 1px solid var(--borde);
+}
+.barra button {
+  margin-left: auto;
+}
+
+.aviso {
+  margin: 12px 16px 0;
+}
+
+.gerente {
+  margin: 12px 16px 0;
+  padding: 12px 16px;
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  display: grid;
+  gap: 12px;
+}
+/* Sin min-width: 0, un hijo de grid no se encoge por debajo de su contenido
+   y la tabla del resumen estira la página en el celular. */
+.gerente > * {
+  min-width: 0;
+}
+.gerente select {
+  width: 100%;
+}
+.gerente summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.desliza {
+  overflow-x: auto;
+}
+
+.tablero {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 16px;
+  padding: 16px;
+  align-items: start;
+}
+.cola, .detalle {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 0;
+}
+.detalle {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.filas tbody tr {
+  cursor: pointer;
+}
+.filas tbody tr:hover {
+  background: var(--fondo);
+}
+.filas tbody tr.activa {
+  background: var(--seleccion);
+}
+
+.temp {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.temp[data-t='alta'] { color: var(--alta); background: var(--alta-fondo); }
+.temp[data-t='media'] { color: var(--media); background: var(--media-fondo); }
+.temp[data-t='baja'] { color: var(--baja); background: var(--baja-fondo); }
+
+.puntaje {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+}
+.puntaje strong {
+  font-size: 24px;
+}
+
+.positivo { color: var(--positivo); font-weight: 600; }
+.negativo { color: var(--negativo); font-weight: 600; }
+
+.lead {
+  margin-top: 16px;
+  padding-top: 8px;
+  border-top: 2px solid var(--borde);
+}
+
+tr.difieren td {
+  background: var(--media-fondo);
+}
+.aviso-sku {
+  color: var(--media);
+  font-size: 13px;
+}
+
+blockquote {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--acento);
+  background: var(--fondo);
+}
+
+/* En pantallas angostas el detalle va debajo de la cola. */
+@media (max-width: 860px) {
+  .tablero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .detalle {
+    position: static;
+    max-height: none;
+  }
+  .filas th:nth-child(5),
+  .filas td:nth-child(5) {
+    display: none;
+  }
+}

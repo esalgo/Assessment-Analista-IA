@@ -11,7 +11,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from backend.config import jwt_secret
 
 ALGORITMO = "HS256"
-DURACION_TOKEN = timedelta(hours=8)
+# Corta a propósito: el frontend guarda el token en sessionStorage (ver README).
+DURACION_TOKEN = timedelta(hours=2)
 _bearer = HTTPBearer(auto_error=False)
 
 # Hash de referencia para comparar cuando el email no existe: así el login

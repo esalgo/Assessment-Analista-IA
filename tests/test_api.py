@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.db.conexion import conectar
+from backend.usuarios import DOMINIO_DEMO
 
 pytestmark = pytest.mark.skipif(
     os.getenv("PRUEBAS_API_DATOS_REALES") != "1", reason="PRUEBAS_API_DATOS_REALES no es 1"
@@ -64,12 +65,12 @@ def ids() -> dict[str, str]:
 
 @pytest.fixture(scope="module")
 def token_asesor_01(cliente: TestClient, ids: dict) -> dict[str, str]:
-    return _token(cliente, f"{ids['asesor_01'].lower()}@demo.local", os.environ["SEED_PASSWORD_ASESOR"])
+    return _token(cliente, f"{ids['asesor_01'].lower()}@{DOMINIO_DEMO}", os.environ["SEED_PASSWORD_ASESOR"])
 
 
 @pytest.fixture(scope="module")
 def token_gerente_01(cliente: TestClient) -> dict[str, str]:
-    return _token(cliente, "gerente.emp-01@demo.local", os.environ["SEED_PASSWORD_GERENTE"])
+    return _token(cliente, f"gerente.emp-01@{DOMINIO_DEMO}", os.environ["SEED_PASSWORD_GERENTE"])
 
 
 def test_health_no_pide_autenticacion(cliente: TestClient) -> None:
@@ -77,7 +78,7 @@ def test_health_no_pide_autenticacion(cliente: TestClient) -> None:
 
 
 def test_login_con_clave_errada_da_401(cliente: TestClient, ids: dict) -> None:
-    respuesta = cliente.post("/auth/login", json={"email": f"{ids['asesor_01'].lower()}@demo.local", "password": "x"})
+    respuesta = cliente.post("/auth/login", json={"email": f"{ids['asesor_01'].lower()}@{DOMINIO_DEMO}", "password": "x"})
     assert respuesta.status_code == 401
 
 
@@ -127,6 +128,34 @@ def test_detalle_trae_factores_citas_y_skus(cliente: TestClient, token_asesor_01
     lead = next(l for l in detalle["leads"] if l["extraccion"])
     assert "justificacion" in lead["extraccion"]
     assert set(lead["sku"]) == {"formulario", "conversacion", "difieren"}
+
+
+def test_asesor_no_accede_a_las_vistas_del_gerente(cliente: TestClient, token_asesor_01: dict) -> None:
+    assert cliente.get("/asesores", headers=token_asesor_01).status_code == 403
+    assert cliente.get("/resumen", headers=token_asesor_01).status_code == 403
+
+
+def test_gerente_solo_lista_asesores_de_su_empresa(cliente: TestClient, ids: dict, token_gerente_01: dict) -> None:
+    respuesta = cliente.get("/asesores", headers=token_gerente_01)
+    assert respuesta.status_code == 200
+    listados = {a["asesor_id"] for a in respuesta.json()}
+    with conectar() as conn:
+        esperados = {a for (a,) in conn.execute("SELECT asesor_id FROM asesores WHERE empresa_id = 'EMP-01' AND activo")}
+    assert listados == esperados
+    assert ids["asesor_02"] not in listados
+
+
+def test_resumen_solo_trae_puntos_de_venta_de_su_empresa(cliente: TestClient, token_gerente_01: dict) -> None:
+    respuesta = cliente.get("/resumen", headers=token_gerente_01)
+    assert respuesta.status_code == 200
+    filas = respuesta.json()
+    with conectar() as conn:
+        puntos = {pv for (pv,) in conn.execute("SELECT punto_venta_id FROM puntos_venta WHERE empresa_id = 'EMP-01'")}
+        activos = conn.execute(
+            "SELECT count(*) FROM scores WHERE empresa_id = 'EMP-01' AND cola IN ('primer_contacto', 'seguimiento')"
+        ).fetchone()[0]
+    assert {f["punto_venta_id"] for f in filas} == puntos
+    assert sum(f["clientes_activos"] for f in filas) == activos
 
 
 def test_pipeline_sin_token_de_servicio_da_401(cliente: TestClient, token_gerente_01: dict) -> None:

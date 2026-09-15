@@ -1,0 +1,20 @@
+<main class="login">
+  <form (submit)="entrar($event, email.value, clave.value)">
+    <h1>Leads del día</h1>
+    <p class="tenue">Ingresa con tu usuario de asesor o de gerente.</p>
+
+    <label>
+      Email
+      <input #email type="email" autocomplete="username" required />
+    </label>
+    <label>
+      Contraseña
+      <input #clave type="password" autocomplete="current-password" required />
+    </label>
+
+    @if (error()) {
+      <p class="error">{{ error() }}</p>
+    }
+    <button type="submit" [disabled]="enviando()">{{ enviando() ? 'Entrando…' : 'Entrar' }}</button>
+  </form>
+</main>

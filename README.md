@@ -1,6 +1,179 @@
 # Priorización de leads — Motos
 
-> README en construcción. Por ahora recoge hallazgos a medida que aparecen.
+Pipeline que convierte los leads crudos de tres comercializadoras de motos en **la lista de gestión del día de cada asesor**, ordenada por probabilidad de cierre y por la ventana de contacto que se está cerrando.
+
+Entra: 1.503 filas de `leads.csv`, 677 conversaciones de WhatsApp, 2.200 cierres históricos, 24 motos y 42 asesores. Sale: 1.451 clientes únicos, cada uno con un score explicable, una temperatura y un puesto en la cola de un asesor concreto.
+
+**Tablero:** `https://<DOMINIO>` · **API:** `https://<DOMINIO>/api/docs` · **Orquestación:** `https://n8n.<DOMINIO>`
+
+## El problema, en números del propio dataset
+
+| Hecho medido | Dónde está |
+|---|---|
+| Contactar en menos de 1 h cierra **15,1 %**; pasadas 48 h, **5,8 %**. La tasa base es 9,0 % | `docs/validacion.md` §2.3 |
+| **451 clientes** llevan más de 48 h sin que nadie los toque | `docs/validacion.md` §2.5 |
+| **823 de los 1.451 clientes no tienen conversación**: el score no puede depender de ella | `scores.sin_senal_conversacional` |
+| **49 grupos** son la misma persona registrada dos veces dentro de una empresa, y 41 de ellos traen estados distintos | "Deduplicación" |
+| **91 grupos** comparten teléfono entre empresas distintas y **no** se fusionan | "Deduplicación" |
+| **PV-013** tarda 7,0 días en atender su cartera; PV-012, de la misma empresa, 0,9 | `docs/validacion.md` §2.5 |
+
+## Cómo verlo
+
+El tablero tiene dos vistas, según el rol del usuario que entra:
+
+- **Asesor** (`<asesor_id>@example.com`): su cola del día en dos grupos, primer contacto y seguimiento. Al abrir un cliente ve el score desglosado en factores, las citas textuales de su conversación y las dos motos (la del formulario y la de la conversación) cuando difieren.
+- **Gerente** (`gerente.<empresa_id>@example.com`): elige cualquier asesor de **su** empresa y ve, además, los días de cartera por punto de venta.
+
+**Usuarios de demo para revisar el tablero:**
+
+| Usuario | Rol | Qué muestra |
+|---|---|---|
+| `as-014@example.com` | asesor de EMP-01 | 20 clientes, 10 en temperatura alta, 14 con conversación |
+| `as-041@example.com` | asesor de EMP-03 | 25 clientes, la cola más cargada |
+| `gerente.emp-01@example.com` | gerente de EMP-01 | selector de asesor y días de cartera por punto de venta |
+| `gerente.emp-03@example.com` | gerente de EMP-03 | incluye PV-013, el punto de venta represado |
+
+Entrar con los dos gerentes, uno después del otro, es la forma más rápida de comprobar el aislamiento: cambian los asesores, los puntos de venta y los clientes.
+
+**Las contraseñas van en el mensaje de entrega, no en este repositorio.** Se siembran desde el `.env` del servidor (`SEED_PASSWORD_ASESOR`, `SEED_PASSWORD_GERENTE`) con `python -m backend.cli seed-usuarios`, que las hashea con bcrypt. Ningún `.sql` versionado contiene una contraseña, ni siquiera de demo: un repositorio con credenciales escritas es exactamente lo que no debe pasar, aunque el entorno sea de prueba.
+
+Hay un usuario por asesor activo (`<asesor_id en minúsculas>@example.com`) y uno por empresa (`gerente.<empresa_id en minúsculas>@example.com`).
+
+**La demostración del aislamiento:** cierra sesión, entra como gerente de otra empresa y cambia todo (asesores, puntos de venta, clientes). No es un filtro del frontend: `empresa_id` sale del token firmado y el filtrado ocurre en Postgres con RLS.
+
+## Cómo correrlo
+
+Requisitos: Docker con Compose. No hace falta Python ni Node en la máquina.
+
+```bash
+cp .env.example .env          # llenar con valores reales (ver DEPLOY del servidor)
+docker compose up -d --build
+
+docker compose exec api python -m backend.cli migrate        # esquema + RLS
+docker compose exec api python -m backend.cli run-all        # pipeline completo
+docker compose exec api python -m backend.cli seed-usuarios  # usuarios de demo
+```
+
+En local, `DOMINIO=localhost docker compose up -d --build`: con el dominio real, Caddy pediría certificados a Let's Encrypt desde una máquina a la que el DNS no apunta.
+
+Cada etapa corre sola y es idempotente: reejecutar no duplica nada ni cambia el resultado.
+
+```bash
+docker compose exec api python -m backend.cli normalize
+docker compose exec api python -m backend.cli score
+```
+
+## Arquitectura
+
+```
+data/input/ (5 archivos)                     n8n  ── cron 6:00 ─┐
+     │ montados :ro                                             │
+     ▼                                                          ▼
+  ingest → load-reference → normalize → resolve-models ──▶ POST /api/pipeline/run
+              → dedupe → extract-ai → score → assign            (FastAPI)
+                              │                                  │
+                         OpenAI gpt-4o-mini                      │
+                              │                                  ▼
+                              └──────────▶ Postgres 18 ◀── RLS ── sesión app_tenant
+                                                │
+                                                ▼
+                                    Angular (Caddy) ── https://<DOMINIO>
+```
+
+Una sola máquina, un `docker-compose.yml` para local y producción, cuatro servicios: `caddy` (TLS y estáticos), `api`, `postgres` y `n8n`. Solo Caddy publica puertos.
+
+**Todo lo que hace n8n se puede hacer sin n8n.** Dispara `POST /pipeline/run` y nada más: cero lógica en sus nodos. El mismo trabajo lo hace `python -m backend.cli run-all`, que es el plan B si la orquestación falla.
+
+## Las ocho etapas
+
+| Etapa | Qué hace | Resultado medido |
+|---|---|---|
+| `ingest` | Carga los 5 archivos **sin limpiar** a tablas `raw_*` | 1.503 filas, hash por archivo |
+| `load-reference` | Catálogos y `historico_cierres` desde `raw_*` | 3 empresas, 15 PV, 42 asesores, 24 motos |
+| `normalize` | Teléfonos, 4 formatos de fecha, ciudades, canal, estado, nombres, cuarentena | 1.500 leads; `LD-01501` y 2 duplicados idénticos fuera |
+| `resolve-models` | 190 textos → 24 SKUs, con cascada y fuzzy | **0 sin resolver**, 0 SKUs inventados |
+| `dedupe` | Identidad por `(empresa_id, telefono_normalizado)` | 49 fusiones; 91 cruces entre empresas **no** fusionados |
+| `extract-ai` | LLM con structured outputs sobre las conversaciones | 640 leads, caché por hash, 3 min 23 s |
+| `score` | Pesos de regresión + multiplicador de urgencia + dos colas | 1.451 clientes con factores explicables |
+| `assign` | Capacidad por punto de venta y reparto entre asesores | 688 de 694 plazas; alertas por PV |
+
+## Modelo de datos
+
+Dos capas. **`raw_*`** guarda los archivos tal como llegaron, en texto: permite reprocesar sin volver a leer disco y deja la trazabilidad de qué venía de origen. **Capa core** (`clientes`, `leads`, `conversaciones`, `mensajes`, `extracciones_ia`, `scores`, `asignaciones`, más los catálogos) tiene tipos reales, enums y llaves foráneas.
+
+Tres decisiones que vale la pena mirar:
+
+- **La identidad del cliente es `(empresa_id, telefono_normalizado)`**, no el teléfono solo. La restricción vive en el motor, así que el aislamiento no depende de que nadie olvide un `WHERE`.
+- **Nada se borra.** Las filas inválidas van a la tabla `cuarentena` con un motivo específico; los leads absorbidos por el dedupe se quedan con `lead_canonico_id` y `motivo_fusion`.
+- **La salida del LLM no se corrige nunca.** Lo que el modelo devolvió queda intacto en `extracciones_ia`; cuando el score necesita otro valor, aplica una regla derivada con nombre y la registra en `scores.factores`.
+
+Las 10 migraciones están numeradas en `db/migrations/` y las aplica `backend.cli migrate`.
+
+## Aislamiento multi-tenant
+
+`empresa_id` **nunca** es parámetro de un endpoint: sale del JWT o no sale. Cada request abre transacción, hace `SET LOCAL ROLE app_tenant`, fija `app.empresa_id` y deja que las políticas de RLS filtren en Postgres.
+
+Dos trampas que costaron depuración y están documentadas abajo: `FORCE ROW LEVEL SECURITY` no basta si la API se conecta como superusuario, y sin `autocommit=True` el contexto de una empresa sobrevive al request. `tests/test_aislamiento.py` prueba las dos.
+
+## Componente de IA
+
+`gpt-4o-mini` con structured outputs (JSON Schema estricto), llamada directa al SDK de OpenAI: sin frameworks de agentes, porque esto es extracción estructurada por lotes.
+
+- **Prompt versionado** en `prompts/` (5 versiones, todas conservadas) y `prompt_version` guardado en cada extracción.
+- **Caché por `sha256(conversación + prompt_version)`**: reejecutar no vuelve a pagar tokens ni cambia resultados.
+- **`justificacion` con cita textual del cliente**, nunca resumen: es lo que permite auditar una respuesta en vivo.
+- **Acierto medido contra 15 conversaciones etiquetadas a mano**, antes de ver la salida del modelo: **88 % global y 93 % en los campos que entran al score** (`docs/validacion.md` §1.8, reproducible con `python -m backend.llm.validar_extraccion`).
+- **Las violaciones de las reglas del prompt se registran, no se corrigen** (`payload.violaciones`).
+
+## API
+
+| Endpoint | Quién | Qué devuelve |
+|---|---|---|
+| `GET /health` | público | estado del servicio |
+| `POST /auth/login` | público | JWT con `empresa_id`, `asesor_id` y `rol` (2 h) |
+| `GET /leads/hoy` | asesor (la suya) / gerente (cualquiera de su empresa) | la cola del día, en dos colas ordenadas |
+| `GET /leads/{lead_id}` | autenticado | cliente consolidado: score, factores, citas y ambos SKU |
+| `GET /asesores` | gerente | asesores activos de su empresa |
+| `GET /resumen` | gerente | días de cartera por punto de venta |
+| `POST /pipeline/run` | n8n, con `X-Pipeline-Token` | dispara el pipeline en segundo plano (202) |
+
+Documentación interactiva en `/api/docs`.
+
+## Automatización
+
+n8n (`n8n/workflow.json`, versionado) con dos nodos: Schedule Trigger a las 6:00 de Bogotá y un HTTP Request a `http://api:8000/pipeline/run` por la red interna de Docker. El token viaja en una credencial Header Auth cifrada dentro de n8n, no en el JSON exportado ni en una variable de entorno legible desde los nodos.
+
+Si la API responde 401 o 409 (ya hay una corrida en curso), la ejecución queda en rojo en el historial de n8n.
+
+## Tests
+
+105 tests. No buscan cobertura: cubren los casos que rompen. La carpeta `tests/` no entra a la imagen, así que se monta al correrlos:
+
+```bash
+# 71 tests puros, sin base de datos
+docker compose run --rm -v ./tests:/app/tests:ro -v ./pytest.ini:/app/pytest.ini:ro api pytest -q
+
+# los 12 de API, contra la base con el pipeline ya corrido
+docker compose run --rm -e PRUEBAS_API_DATOS_REALES=1 \
+  -v ./tests:/app/tests:ro -v ./pytest.ini:/app/pytest.ini:ro api pytest tests/test_api.py
+```
+
+Los 34 restantes necesitan una base desechable en `TEST_DATABASE_URL` (ver el final de este archivo) o una base con datos; sin ellas se omiten en vez de fallar, y el comando lo dice.
+
+Ejemplos de lo que se prueba: `573223242028` normaliza a 10 dígitos, `08/15/2026` se lee como agosto, `Hnda CB 190R` resuelve por fuzzy, un duplicado entre empresas **no** se fusiona, una conversación huérfana va a cuarentena sin romper el pipeline, un asesor recibe 403 al pedir la cola de otro, y un `INSERT` cruzado falla con `violates row-level security policy`.
+
+## Dónde está cada requisito
+
+| Requisito | Dónde |
+|---|---|
+| Ingesta y limpieza de datos sucios | `backend/stages/ingest.py`, `normalize.py`; "Fechas con barra", "Contactos sin hora" |
+| Unificación de leads del mismo cliente entre canales | `backend/stages/dedupe.py`; "Deduplicación" |
+| Enriquecimiento con IA sobre las conversaciones | `backend/llm/`, `prompts/`; `docs/validacion.md` §1 |
+| Priorización con score explicable | `backend/stages/score.py`, `backend/scoring/`; `docs/validacion.md` §2 |
+| Asignación por asesor | `backend/stages/assign.py`; `docs/validacion.md` §2.5 |
+| Producto consultable | `backend/api/`, `frontend/`; "Tablero: sesión, token y roles" |
+| Ejecución automática diaria | `n8n/workflow.json`; "Automatización" |
+| Aislamiento entre comercializadoras | `db/migrations/004_rls.sql`, `backend/api/db.py`, `tests/test_aislamiento.py` |
 
 ## Hallazgos de implementación
 
@@ -176,7 +349,21 @@ Los tramos de urgencia son correctos sobre probabilidad de cierre, pero para un 
 
 Detalle en [`docs/validacion.md`](docs/validacion.md), secciones 2.4 y 2.5.
 
+### Tablero: sesión, token y roles
+
+**El token vive en `sessionStorage` y dura 2 horas.** La alternativa correcta para producción no es guardarlo en memoria, sino una **cookie `httpOnly`**: ningún script de la página puede leerla, así que un XSS no puede robar la sesión. A cambio exige protección CSRF (cookie `SameSite` más un token anti-CSRF en las peticiones que escriben) y cuidar el dominio y el `Secure` de la cookie entre la API y el frontend. En este alcance, `sessionStorage` con expiración corta es una compensación razonable:
+
+- El token muere al cerrar la pestaña y, de todos modos, a las 2 horas (la demo dura 30 minutos).
+- Angular escapa todo lo que interpola y el frontend no inserta HTML crudo en ningún lado, lo que reduce la superficie de XSS, aunque no la elimina.
+- Recargar la página no cierra la sesión, cosa que sí pasaría con el token solo en memoria.
+
+**El JWT va firmado, no cifrado:** cualquiera puede leer sus claims decodificando el base64. Por eso solo lleva identificadores: `sub` (el UUID del usuario), `empresa_id`, `asesor_id`, `rol`, y las marcas de tiempo `iat` y `exp`. No lleva nombres ni correos. El frontend lee `rol` para decidir qué pantalla mostrar, pero eso no es control de acceso: la API verifica la firma y aplica el rol y la empresa en cada request.
+
+**Vistas del gerente.** `GET /asesores` alimenta el selector de asesor y `GET /resumen` muestra los días de cartera por punto de venta, el hallazgo de PV-013 (7,0 días) de `docs/validacion.md` §2.5. Las dos responden 403 a un asesor, y ninguna filtra por empresa en la consulta: lo hace RLS. Por eso el selector del gerente de EMP-01 nunca muestra asesores de EMP-02, y `tests/test_api.py` lo verifica contra una consulta directa.
+
 ## Qué haría con más tiempo
+
+- **Revocar la sesión de un usuario desactivado.** Hoy `POST /auth/login` comprueba `usuarios.activo`, pero después nadie vuelve a mirar esa tabla: los endpoints confían en el token firmado. Si un usuario se desactiva, su token sigue funcionando hasta que vence. La corrección es consultar `usuarios` por el claim `sub` (el UUID del usuario) en cada request y rechazar el token si la cuenta ya no está activa; el costo es una consulta por request, evitable con una caché corta. Con tokens de 2 horas la ventana es pequeña, y por eso no se hizo. Ese es también el motivo de conservar `sub`: sin él no hay a quién revocarle nada, y un token de gerente (con `asesor_id` nulo) sería indistinguible del de cualquier otro gerente de la misma empresa.
 
 - **Agregar la interacción cita × forma de pago al modelo.** En el histórico, pedir cita no mejora el cierre cuando el cliente va a crédito (7–11 %), y sí lo sube a 14–24 % cuando va de contado o no informa. El modelo aditivo le da +24 a la cita en los dos casos, y eso desordena los deciles del medio. Se resuelve dentro de la logística con un término de interacción; hay que validarlo con CV repetida, porque varias combinaciones tienen menos de 50 leads.
 

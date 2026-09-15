@@ -50,6 +50,82 @@ def login(credenciales: Credenciales) -> dict[str, str]:
     return {"access_token": crear_token(usuario), "token_type": "bearer"}
 
 
+# --- Vistas del gerente ----------------------------------------------------------
+
+
+def exigir_gerente(usuario: Usuario) -> None:
+    if usuario.rol != "gerente":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "solo un gerente tiene acceso")
+
+
+@router.get("/asesores")
+def asesores(
+    usuario: Usuario = Depends(usuario_actual),
+    conn: psycopg.Connection = Depends(sesion_tenant),
+) -> list[dict]:
+    """Los asesores activos para el selector del gerente. La consulta no filtra
+    por empresa: lo hace RLS, así que un gerente nunca ve asesores de otra."""
+    exigir_gerente(usuario)
+    filas = conn.execute(
+        "SELECT asesor_id, nombre, punto_venta_id FROM asesores WHERE activo ORDER BY punto_venta_id, asesor_id"
+    ).fetchall()
+    return [{"asesor_id": a, "nombre": n, "punto_venta_id": pv} for a, n, pv in filas]
+
+
+@router.get("/resumen")
+def resumen(
+    usuario: Usuario = Depends(usuario_actual),
+    conn: psycopg.Connection = Depends(sesion_tenant),
+) -> list[dict]:
+    """Días de cartera por punto de venta: cuántos días tardan los asesores
+    activos en atender a todos los clientes activos (primer contacto +
+    seguimiento). Misma fórmula que el resumen de la etapa assign.
+    Ordenado de mayor a menor: arriba el punto de venta más represado."""
+    exigir_gerente(usuario)
+    asesores_pv = {
+        pv: (activos, inactivos, cap)
+        for pv, activos, inactivos, cap in conn.execute(
+            """
+            SELECT punto_venta_id,
+                   count(*) FILTER (WHERE activo),
+                   count(*) FILTER (WHERE NOT activo),
+                   coalesce(sum(capacidad_diaria_leads) FILTER (WHERE activo), 0)
+            FROM asesores GROUP BY punto_venta_id
+            """
+        )
+    }
+    clientes_pv = {
+        pv: (pendientes, seguimiento)
+        for pv, pendientes, seguimiento in conn.execute(
+            """
+            SELECT punto_venta_id,
+                   count(*) FILTER (WHERE cola = 'primer_contacto'),
+                   count(*) FILTER (WHERE cola = 'seguimiento')
+            FROM scores GROUP BY punto_venta_id
+            """
+        )
+    }
+
+    filas = []
+    for pv in sorted(asesores_pv.keys() | clientes_pv.keys()):
+        activos, inactivos, cap = asesores_pv.get(pv, (0, 0, 0))
+        pendientes, seguimiento = clientes_pv.get(pv, (0, 0))
+        cartera = pendientes + seguimiento
+        filas.append({
+            "punto_venta_id": pv,
+            "asesores_activos": activos,
+            "asesores_inactivos": inactivos,
+            "capacidad_diaria": cap,
+            "pendientes": pendientes,
+            "seguimiento": seguimiento,
+            "clientes_activos": cartera,
+            # None cuando no hay capacidad: la cartera no se atiende nunca.
+            "dias_de_cartera": round(cartera / cap, 1) if cap else None,
+        })
+    # Sin capacidad (None) va primero: es el peor caso, no el mejor.
+    return sorted(filas, key=lambda f: (f["dias_de_cartera"] is None, f["dias_de_cartera"] or 0), reverse=True)
+
+
 # --- Cola del día ------------------------------------------------------------
 
 
