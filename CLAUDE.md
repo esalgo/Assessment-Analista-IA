@@ -53,6 +53,8 @@ CREATE POLICY aisla_empresa ON <tabla>
 
 **El `FORCE` no es opcional.** El dueño de una tabla está exento de sus propias políticas por defecto, y la API se conecta con el mismo usuario que creó el esquema. Sin `FORCE`, las políticas se ignoran en silencio: las consultas devuelven todo, no hay ningún error y el aislamiento es puro teatro. Es el fallo más caro posible en este proyecto.
 
+**`FORCE` tampoco basta solo.** La imagen de Postgres crea `POSTGRES_USER` como **superusuario**, y un superusuario (o un rol con `BYPASSRLS`) se salta RLS siempre, con o sin `FORCE`. Por eso `004_rls.sql` crea el rol `app_tenant` (`NOLOGIN NOSUPERUSER NOBYPASSRLS`, sin ser dueño de ninguna tabla) y la API hace `SET LOCAL ROLE app_tenant` en cada transacción. El pipeline batch (CLI) sigue como superusuario a propósito: procesa las tres empresas.
+
 Las tablas que **no** llevan RLS: `usuarios` (ver abajo, es un caso especial), `motos`, `marcas`, `inventario_pv`, `ciudades`, `empresas`, `puntos_venta`, `historico_cierres`, `score_pesos` y todas las `raw_*`. Son referencia compartida o analítica; poner RLS en `inventario_pv` rompe el join de disponibilidad.
 
 ### Tabla `usuarios`
@@ -89,10 +91,13 @@ async def db_sesion(token: str = Depends(oauth2)):
                 "SELECT set_config('app.empresa_id', %s, true)",
                 (claims["empresa_id"],),
             )
+            await conn.execute("SET LOCAL ROLE app_tenant")
             yield conn
 ```
 
-El tercer argumento `true` de `set_config` lo hace local a la transacción, así que el valor no se filtra al siguiente request que reutilice esa conexión de la pool.
+El tercer argumento `true` de `set_config` lo hace local a la transacción, igual que `SET LOCAL ROLE`: al cerrar la transacción ambos se deshacen y no se filtran al siguiente request que reutilice esa conexión de la pool.
+
+**Las conexiones deben estar en `autocommit=True`.** Sin autocommit, psycopg abre una transacción implícita con la primera consulta y todo `with conn.transaction()` posterior es solo un **savepoint** dentro de ella. `SET LOCAL` y `set_config(..., true)` duran hasta el fin de la transacción *externa*, no del savepoint: el contexto del tenant (empresa y rol) sobrevive al request y el siguiente que use esa conexión ve datos de otra empresa. Verificado en la prueba del esquema: sin autocommit, una sesión sin empresa fijada devolvió las filas de la empresa anterior y `current_user` seguía siendo `app_tenant`. `backend/db/conexion.py` ya conecta así; la pool de la API debe hacer lo mismo (`kwargs={"autocommit": True}`).
 
 ### Test obligatorio
 
