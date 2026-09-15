@@ -275,6 +275,17 @@ Regresión logística entrenada sobre el histórico (sin las "Sin gestión"), co
 
 Referencia medida: AUC 0.619 en CV5. El decil alto llega a 15,5 % de cierre (lift 1,6x sobre la base de 9 %).
 
+### Requisito: la cola del día consolida el grupo fusionado, no lee solo el canónico
+
+`dedupe` deja el lead canónico **intacto**: conserva su propio `estado_gestion`, `fecha_primer_contacto`, punto de venta y SKU. Los absorbidos siguen en `leads` con `lead_canonico_id` apuntando a él. Consolidar es trabajo de `score`, y es obligatorio:
+
+- **`estado_gestion`**: el más avanzado del grupo (canónico + absorbidos).
+- **`fecha_primer_contacto`**: la más temprana del grupo.
+
+Si `score` lee solo el canónico, un cliente con cotización enviada por un canal aparece como `sin_gestion` por el otro, y el asesor lo llama desde cero. Es exactamente la queja del gerente comercial. De los 49 grupos fusionados, **41 tienen estados distintos** entre sus leads: el caso no es teórico.
+
+El orden de "más avanzado" entre los seis estados es una decisión de negocio: se define explícitamente al implementar `score`, no se infiere.
+
 ## Etapas del pipeline
 
 ```

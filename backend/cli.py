@@ -3,6 +3,7 @@
 import typer
 
 from backend.db.migrar import aplicar_migraciones
+from backend.stages.dedupe import deduplicar
 from backend.stages.ingest import ErrorDeFormato, ingestar
 from backend.stages.load_reference import ErrorDeReferencia, cargar_referencia
 from backend.stages.normalize import ErrorDeCatalogo, normalizar
@@ -76,7 +77,8 @@ def resolve_models() -> None:
 @app.command()
 def dedupe() -> None:
     """Deduplica clientes por (empresa_id, telefono_normalizado)."""
-    _pendiente("dedupe")
+    for nombre, cantidad in sorted(deduplicar().items()):
+        typer.echo(f"[dedupe] {nombre:<45} {cantidad:>5}")
 
 
 @app.command("extract-ai")

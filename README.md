@@ -79,6 +79,32 @@ Cuando las dos lecturas del contacto son coherentes, se elige la más cercana al
 - **El fuzzy (`fuzz.ratio` ≥ 85) solo recibe los errores de tipeo de marca** (`Hnda`, `Bajai`, `Heroo`, `Suzuky`), porque las reglas anteriores ya resolvieron el resto. Sobre lo que realmente le llega: ganador entre 92,31 y 97,56, segundo candidato como máximo 84,21, margen mínimo 10,53 (`Bajai Pulsar NS 125` contra NS 160). Cada fila fuzzy guarda ambos scores (`match_confidence`, `match_score_segundo`).
 - **Por qué no `WRatio`:** puntúa `Bajaj Pulsar` con 90 contra NS 125 y contra NS 160, y elige uno arbitrariamente.
 
+### Deduplicación: por persona dentro de cada empresa, nunca entre empresas
+
+Clave de identidad `(empresa_id, telefono_normalizado)`. Un teléfono en dos comercializadoras son dos clientes: fusionarlos rompería el aislamiento del requisito 8.
+
+| | Grupos / leads |
+|---|---|
+| Teléfonos repetidos (global) | 140 |
+| Cruzan empresa → **no se fusionan** | 91 |
+| Dentro de la misma empresa → fusionados | **49** (28 cruzan canal, 21 mismo canal) |
+| Teléfono compartido con nombre incompatible (no fusionados) | 0 |
+| Leads: total / canónicos / absorbidos | 1.500 / **1.451** / 49 |
+
+- **Canónico:** `fecha_registro` más antigua, desempate por `lead_id`. En 26 de los 49 grupos el `lead_id` menor no es el que llegó primero.
+- **Guarda de nombre: falta un dato sí, datos que se contradicen no.** Apellidos = las dos últimas palabras si el nombre tiene tres o más, la última si tiene dos (verificado sobre los 1.500 leads: ningún nombre de tres palabras trae nombre de pila compuesto). Se fusiona si la inicial coincide y, cuando ambos traen dos apellidos, coinciden los dos; si uno trae solo uno, basta con que ese coincida. `M. Muñoz Ramírez` contra `Marcela Muñoz Escobar` **no** se fusiona: ambos declaran dos apellidos y uno se contradice.
+- **Qué requirió de verdad cada uno de los 49:**
+
+  | `comparacion_nombre` | Pares | Qué los resuelve |
+  |---|---|---|
+  | `iguales` | 31 | Difieren solo en tildes o mayúsculas. Con teléfono normalizado y nombre normalizado ya son el mismo registro: la guarda no decide nada. |
+  | `falta_dato` | 18 | Aquí la guarda aplica de verdad: 9 con el nombre abreviado a la inicial (`Y. Castaño Valencia`) y 9 con un solo apellido, que coincide con el primero del otro (`María Valencia` / `María Fernanda Valencia Salazar`). |
+  | `contradicen` | 0 | |
+
+  Dos tercios de las fusiones las resuelve la normalización; la guarda de nombre es la que sostiene 18.
+- **`motivo_fusion`** en cada absorbido: regla, confianza (1,0, o 0,8 en los 2 grupos con una fecha de registro ambigua, porque la elección del canónico también lo es), si cruzó canal y `comparacion_nombre`.
+- **El canónico no hereda datos de los absorbidos.** La cola del día debe consolidar estado y primer contacto sobre el grupo completo (41 de 49 grupos tienen estados distintos).
+
 ## Supuestos
 
 - **`FECHA_REFERENCIA`, no `now()`.** La validación de fechas futuras (y más adelante la urgencia del score) usa la máxima fecha inequívoca del dataset (2026-09-14), configurable por variable de entorno. El dataset es un corte estático: con la fecha del sistema, `normalize` daría resultados distintos según el día en que se corra. En operación real la referencia sería la fecha de ejecución.
