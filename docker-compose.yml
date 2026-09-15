@@ -3,6 +3,11 @@
 # Solo Caddy publica puertos al exterior (80/443).
 # Postgres y n8n viven en la red interna: no se exponen a internet.
 
+# Nombre fijo del proyecto. Sin él, Compose usa el nombre de la carpeta
+# ("project"), que choca con otros proyectos del mismo equipo: los volúmenes
+# se llamarían igual (project_n8n_data) y un stack montaría los datos del otro.
+name: leads-motos
+
 services:
   caddy:
     build:
@@ -35,7 +40,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       TZ: America/Bogota
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      # Postgres 18 espera el volumen en /var/lib/postgresql, no en .../data:
+      # guarda los datos en un subdirectorio por versión mayor (18/docker).
+      # Con el montaje en .../data arranca la primera vez con el volumen vacío,
+      # pero cualquier reinicio posterior falla y la base no vuelve a levantar.
+      - pg_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s

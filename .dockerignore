@@ -1,0 +1,23 @@
+# Contexto de build de las dos imágenes (API y web).
+# Lo que no está aquí no puede terminar dentro de una imagen por un COPY amplio.
+
+# Secretos: nunca en el contexto de build
+.env
+.env.*
+!.env.example
+
+# Dependencias y artefactos del host: la imagen instala y compila los suyos.
+# Sin esto, `COPY frontend/ .` pisa el node_modules instalado en la imagen
+# con el del host.
+.venv/
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+**/__pycache__/
+.pytest_cache/
+
+# No se usan en las imágenes
+.git/
+data/output/
+tests/
+docs/

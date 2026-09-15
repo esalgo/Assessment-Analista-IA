@@ -2,7 +2,8 @@
 # [standard] trae uvicorn y el comando `fastapi` (dev/run)
 fastapi[standard]
 pyjwt
-passlib[bcrypt]
+# bcrypt directo, sin passlib: passlib 1.7.4 falla con bcrypt 5 al detectar el backend.
+bcrypt==5.0.0
 
 # --- Base de datos ---
 # psycopg3 con binarios precompilados. Sin ORM: SQL crudo.

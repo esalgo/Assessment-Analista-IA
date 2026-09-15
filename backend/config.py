@@ -19,6 +19,21 @@ def fecha_referencia_configurada() -> date | None:
     return date.fromisoformat(valor) if valor else None
 
 
+def dias_absorber_represamiento() -> int:
+    """En cuántos días debe vaciarse la cola de primer contacto con la
+    capacidad diaria. De aquí sale el reparto entre las dos colas."""
+    return int(os.getenv("DIAS_ABSORBER_REPRESAMIENTO", "2"))
+
+
+def jwt_secret() -> str:
+    return os.environ["JWT_SECRET"]
+
+
+def pipeline_token() -> str:
+    """Token que n8n manda en X-Pipeline-Token para disparar el pipeline."""
+    return os.environ["PIPELINE_TOKEN"]
+
+
 def data_input_dir() -> Path:
     """En Docker es /app/data/input (lo define el .env). En local, si no
     está definida, se usa data/input del repo."""

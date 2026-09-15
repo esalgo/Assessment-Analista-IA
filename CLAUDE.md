@@ -74,7 +74,7 @@ Va en `002_referencia.sql`, y es la única tabla con `empresa_id` que **NO lleva
 
 `asesor_id` es nulable: un usuario con `rol = 'gerente'` ve todos los leads de su empresa; uno con `rol = 'asesor'` ve solo su cola. Dos líneas de condición en el endpoint.
 
-**Hash con `bcrypt` vía `passlib`, nunca SHA256 pelado.** Los usuarios de demo se siembran desde el CLI (`python -m backend.cli seed-usuarios`) leyendo las contraseñas del `.env`. **Nunca un `INSERT` con contraseña en texto plano dentro de un `.sql` commiteado**: eso es la causal de descalificación de credenciales expuestas, aunque sea data de demo.
+**Hash con `bcrypt` directo (sin `passlib`), nunca SHA256 pelado.** `passlib` 1.7.4 falla con `bcrypt` 5 al detectar el backend. Los usuarios de demo se siembran desde el CLI (`python -m backend.cli seed-usuarios`) leyendo las contraseñas del `.env`. **Nunca un `INSERT` con contraseña en texto plano dentro de un `.sql` commiteado**: eso es la causal de descalificación de credenciales expuestas, aunque sea data de demo.
 
 ### En la API
 
@@ -296,6 +296,7 @@ Esto decide qué puede pesar en el score con pesos derivados de la regresión.
 | `objecion_principal` | — | No, es información para el asesor |
 | `campos_informados` | — | No |
 | `confianza` | — | No, y no se usa |
+| `estado_gestion` | — | No: el histórico no trae esa columna. Filtra la cola y da contexto al asesor; **no prioriza** |
 
 Lo no calibrable solo entra al score como ajuste de criterio propio, declarado como tal en `factores` y en el README.
 
@@ -333,7 +334,27 @@ Regresión logística entrenada sobre el histórico (sin las "Sin gestión"), co
 
 **Las horas sin contacto son un multiplicador de urgencia, no una feature.** En el histórico predicen cierre; en un lead pendiente representan una ventana que se cierra.
 
-Referencia medida: AUC 0.619 en CV5. El decil alto llega a 15,5 % de cierre (lift 1,6x sobre la base de 9 %).
+**Dos componentes con respaldo distinto. Nunca se reporta un AUC único como si midiera el score completo.**
+- **Señales de la conversación:** `logit_v2` (`python -m backend.scoring.entrenar`) con `pidio_cita`, `manifesto_cuota_inicial` y `forma_pago`. Validación fuera de pliegue de los puntos de producción (`python -m backend.scoring.validar_score`): AUC 0,552, lift del top 20 % 1,31x, temperatura alta 13,9 % contra baja 7,4 %. Cita × crédito es una interacción que el modelo aditivo no captura. **`canal` y precio no entran:** sus pesos cruzaban el cero. Tampoco `horas_al_primer_contacto` ni `numero_contactos`, que no existen al priorizar.
+- **Urgencia:** multiplicador por tramo (≤1 h, 1–4 h, 4–24 h, 24–48 h, >48 h) = tasa del tramo / tasa base, **calculado en `entrenar.py` y guardado en `score_weights.json`, nunca escrito a mano**. Para un lead pendiente las horas son desde el registro sin contacto: **premia la oportunidad, no un resultado**. Un cliente ya contactado tiene multiplicador 1.
+
+**Pesos centrados en la tasa base.** `SI` suma y `NO` resta según sus log-odds; `NO_INFORMA` / `no_informa` = 0 puntos (sin información, sin ajuste), también en `forma_pago`. 1 punto = 0,01 de log-odds.
+
+**Escala 0–100 entera.** 50 = tasa base; 0 y 100 = peor y mejor combinación **alcanzable** (se enumeran las combinaciones que la extracción puede producir; contado con inicial SI no cuenta). Sin recortes.
+
+**Priorizar no es predecir: dos colas.** `primer_contacto` (ningún lead del grupo contactado) y `seguimiento` (ya contactados); `descartado` queda fuera de cola. Nunca un orden global: el multiplicador castiga haber esperado y mandaría al final a los no contactados.
+- **Orden en cada cola:** score descendente, desempate por horas transcurridas ascendentes (primer contacto: desde el registro; seguimiento: desde el primer contacto), último criterio `lead_id`.
+- **Temperatura = calidad del lead, separada de la capacidad:** alta = dos señales positivas fuertes (`pidio_cita = SI`, `forma_pago = contado`, `manifesto_cuota_inicial = SI`), media = una, baja = ninguna. No depende de la posición ni de si entra hoy.
+- **Capacidad por punto de venta, nunca global** (etapa `assign`): capacidad del PV = suma de sus asesores activos. Primer contacto = ⌈pendientes del PV / `DIAS_ABSORBER_REPRESAMIENTO`⌉ con tope en la capacidad; seguimiento = el resto. Reparto entre asesores proporcional a su capacidad, con la misma proporción entre colas. **No hay asesores dedicados**: `asesores.csv` no trae roles.
+- `assign` reporta alertas por PV: pendientes que no se absorben en los días fijados y cartera activa que supera capacidad × días.
+- **Traslado de sobrante entre colas**, en ambos sentidos y solo dentro del mismo PV: la proporción se respeta mientras ambas colas tengan clientes; el objetivo de días es un mínimo, no un techo. Seguimiento se reparte sobre la capacidad restante de cada asesor, así nadie supera la suya.
+- **El cliente fusionado se asigna al PV de su lead más reciente** (`scores.punto_venta_id`), no al del canónico, que es el más antiguo.
+- En este corte estático el multiplicador es constante para los pendientes (todos > 48 h); se conserva porque en operación diaria discrimina.
+- `scores` guarda una fila por cliente (lead canónico) y se reemplaza entera en cada corrida (migración 009). `asignaciones` se reemplaza por fecha y guarda la cola (migración 010).
+
+**Las comparaciones de modelos se deciden sobre CV repetida con varias semillas, nunca sobre una partición.** Con 197 positivos, la partición mueve el AUC tanto como la familia del modelo; solo reordenar las filas lo movió 2 puntos. El AUC 0.619 del plan inicial no se reproduce y no se cita. Los datos del entrenamiento se leen con `ORDER BY` fijo.
+
+`historico_cierres.pidio_cita` es texto `SI`/`NO` desde la migración 008, igual que el archivo: sin traducción boolean al leer.
 
 ### Requisito: la cola del día consolida el grupo fusionado, no lee solo el canónico
 
@@ -344,7 +365,25 @@ Referencia medida: AUC 0.619 en CV5. El decil alto llega a 15,5 % de cierre (lif
 
 Si `score` lee solo el canónico, un cliente con cotización enviada por un canal aparece como `sin_gestion` por el otro, y el asesor lo llama desde cero. Es exactamente la queja del gerente comercial. De los 49 grupos fusionados, **41 tienen estados distintos** entre sus leads: el caso no es teórico.
 
-El orden de "más avanzado" entre los seis estados es una decisión de negocio: se define explícitamente al implementar `score`, no se infiere.
+**Orden del embudo (decidido el día 3):** `sin_gestion → no_contesta → contactado → en_proceso → cotizacion_enviada`. El grupo toma el estado más avanzado de esa escala.
+
+**`descartado` no está en la escala:** es una salida, no un avance. Se resuelve por recencia: si el descarte es el estado más reciente del grupo, el cliente está descartado; si es anterior a otro estado, la persona volvió y vale el estado del embudo. Afecta a 13 de los 49 grupos fusionados.
+
+**Fecha sustituta: `fecha_registro` de cada lead del grupo.** Los leads no traen fecha de cambio de estado. Es una aproximación declarada en el README: un registro nuevo después del descarte cuenta como que la persona volvió.
+
+### Variables del modelo: solo las que existen para un lead nuevo
+
+El score se entrena sobre `historico_cierres` y se aplica a `leads`. Una variable que no se puede calcular para un lead actual no entra al entrenamiento, aunque suba el AUC.
+
+| Variable del histórico | En un lead actual | ¿Entra? |
+|---|---|---|
+| `canal` | Directa (`leads.canal`) | Sí |
+| `precio_lista` (vía `modelo_cotizado`) | Derivada: SKU (conversación o formulario) → `motos.precio_lista`. Sin SKU en los leads con solo marca y sin conversación | Sí, con categoría "sin precio" |
+| `manifesto_cuota_inicial` | Derivada del LLM (640 leads); sin conversación queda `NO_INFORMA` | Sí |
+| `forma_pago_declarada` | Derivada del LLM + regla `inicial_mencionada_implica_credito`; sin conversación queda `no_informa` | Sí |
+| `pidio_cita` | Derivada del LLM (`SI`/`NO`/`NO_INFORMA`). El histórico solo tiene `SI`/`NO` | Sí, con tratamiento explícito de `NO_INFORMA` |
+| `horas_al_primer_contacto` | Solo existe **después** del contacto: nula en los 485 leads pendientes, que son justo los que hay que priorizar; sin hora en 208 | **No** como feature. Es el multiplicador de urgencia |
+| `numero_contactos` | **No existe** en `leads.csv` y no se deriva de nada (los mensajes de WhatsApp no son contactos del asesor) | **No** |
 
 ## Etapas del pipeline
 
@@ -388,6 +427,14 @@ docker compose exec api python -m backend.cli migrate
 **Imágenes fijadas** (no uses `latest` en ninguna): `pgvector/pgvector:0.8.6-pg18`, `docker.n8n.io/n8nio/n8n:2.38.3`, `python:3.12-slim`, `node:24-alpine`, `caddy:2-alpine`.
 
 **Archivos de infraestructura en la raíz del repo:** `docker-compose.yml`, `Dockerfile` (API, python:3.12-slim), `Dockerfile.web` (multietapa: node:24-alpine compila Angular → caddy:2-alpine lo sirve), `Caddyfile`, `.env.example`.
+
+**Nombre del proyecto de Compose fijo (`name: leads-motos`).** Sin él, Compose usa el nombre de la carpeta (`project`) y los volúmenes chocan con otros proyectos del mismo equipo: el 15 de septiembre, n8n montó el `project_n8n_data` de otro proyecto y solo lo salvó que la clave de cifrado no coincidía.
+
+**Postgres 18 monta el volumen en `/var/lib/postgresql`, no en `/var/lib/postgresql/data`.** Con el montaje viejo arranca la primera vez y falla en cualquier reinicio.
+
+**En local, `DOMINIO=localhost docker compose up -d --build`.** Con el dominio real, Caddy pediría certificados a Let's Encrypt desde un equipo al que el DNS no apunta y gastaría intentos del límite.
+
+**API detrás de Caddy:** `handle_path /api/*` quita el prefijo, las rutas de FastAPI no llevan `/api` y `root_path="/api"` corrige `/docs`. n8n llama directo a `http://api:8000/pipeline/run`.
 
 **Nunca borres el volumen `caddy_data`:** guarda los certificados de Let's Encrypt y el límite son 5 por semana para el mismo dominio.
 

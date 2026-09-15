@@ -115,7 +115,7 @@ def cargar_referencia() -> dict[str, int]:
             SELECT h.lead_id, h.fecha_registro::date, h.canal, h.empresa_id, h.punto_venta_id,
                    h.modelo_cotizado, m.sku, h.precio_lista::bigint,
                    nullif(h.horas_al_primer_contacto, '')::numeric, h.numero_contactos::integer,
-                   h.manifesto_cuota_inicial, h.forma_pago_declarada, h.pidio_cita = 'SI', h.desenlace
+                   h.manifesto_cuota_inicial, h.forma_pago_declarada, h.pidio_cita, h.desenlace
             FROM raw_historico h
             LEFT JOIN motos m ON m.marca || ' ' || m.linea = h.modelo_cotizado
             ON CONFLICT (lead_id) DO UPDATE SET

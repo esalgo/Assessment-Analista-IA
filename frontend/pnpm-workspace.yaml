@@ -1,0 +1,11 @@
+# pnpm 11 no ejecuta scripts de instalación de dependencias salvo que se
+# declaren aquí, y en una instalación no interactiva (docker build) un script
+# sin declarar es error. Cada uno se decide explícitamente:
+allowBuilds:
+  # Verifica el binario de la plataforma; lo usa `ng build`.
+  esbuild: true
+  # Observador de archivos para `ng serve`: no hace falta para compilar.
+  "@parcel/watcher": false
+  # Caché en disco del compilador: opcional, no hace falta para compilar.
+  lmdb: false
+  msgpackr-extract: false

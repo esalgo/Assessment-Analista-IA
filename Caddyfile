@@ -12,8 +12,9 @@
 {$DOMINIO} {
 	encode gzip
 
-	# La API
-	handle /api/* {
+	# La API. handle_path quita el prefijo /api antes de pasar la petición:
+	# /api/auth/login llega a FastAPI como /auth/login.
+	handle_path /api/* {
 		reverse_proxy api:8000
 	}
 

@@ -1,0 +1,117 @@
+{
+  "score_version": "logit_v2",
+  "modelo": "regresión logística sin regularización, pesos centrados en la tasa base",
+  "entrenamiento": {
+    "tabla": "historico_cierres",
+    "excluidas": "desenlace = 'Sin gestión' (fuga de información)",
+    "filas": 2021,
+    "cerrados": 197,
+    "tasa_base": 0.0975
+  },
+  "puntos_por_log_odds": 100,
+  "regla_sin_informacion": "NO_INFORMA / no_informa = 0 puntos: el lead queda en la tasa base",
+  "variables": {
+    "manifesto_cuota_inicial": {
+      "NO": -19,
+      "SI": 16,
+      "NO_INFORMA": 0
+    },
+    "forma_pago": {
+      "credito": -9,
+      "contado": 32,
+      "no_informa": 0
+    },
+    "pidio_cita": {
+      "NO": -10,
+      "SI": 24,
+      "NO_INFORMA": 0
+    }
+  },
+  "urgencia": {
+    "que_mide": "horas desde el registro sin contacto, al momento de priorizar",
+    "lectura": "premia la oportunidad, no un resultado: un lead pendiente en el tramo <=1h todavía puede contactarse dentro de la ventana que en el histórico cerró más",
+    "tramos": [
+      {
+        "tramo": "<=1h",
+        "horas_hasta": 1,
+        "leads": 377,
+        "tasa_cierre": 0.1512,
+        "multiplicador": 1.55
+      },
+      {
+        "tramo": "1-4h",
+        "horas_hasta": 4,
+        "leads": 493,
+        "tasa_cierre": 0.1156,
+        "multiplicador": 1.19
+      },
+      {
+        "tramo": "4-24h",
+        "horas_hasta": 24,
+        "leads": 604,
+        "tasa_cierre": 0.0778,
+        "multiplicador": 0.8
+      },
+      {
+        "tramo": "24-48h",
+        "horas_hasta": 48,
+        "leads": 234,
+        "tasa_cierre": 0.0769,
+        "multiplicador": 0.79
+      },
+      {
+        "tramo": ">48h",
+        "horas_hasta": null,
+        "leads": 313,
+        "tasa_cierre": 0.0575,
+        "multiplicador": 0.59
+      }
+    ]
+  },
+  "intervalo_90_bootstrap_puntos": {
+    "manifesto_cuota_inicial=NO": [
+      -35,
+      -6
+    ],
+    "manifesto_cuota_inicial=SI": [
+      5,
+      30
+    ],
+    "manifesto_cuota_inicial=NO_INFORMA": [
+      0,
+      0
+    ],
+    "forma_pago=credito": [
+      -15,
+      -1
+    ],
+    "forma_pago=contado": [
+      5,
+      53
+    ],
+    "forma_pago=no_informa": [
+      0,
+      0
+    ],
+    "pidio_cita=NO": [
+      -17,
+      -2
+    ],
+    "pidio_cita=SI": [
+      5,
+      40
+    ],
+    "pidio_cita=NO_INFORMA": [
+      0,
+      0
+    ]
+  },
+  "validacion": {
+    "auc_cv5_media_10_semillas": 0.559,
+    "auc_rango_entre_semillas": [
+      0.545,
+      0.571
+    ],
+    "alcance": "mide solo las señales de la regresión; la urgencia es un multiplicador validado aparte"
+  }
+}

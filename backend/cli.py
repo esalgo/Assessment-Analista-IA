@@ -6,19 +6,19 @@ from typing import Annotated
 import typer
 
 from backend.db.migrar import aplicar_migraciones
+from backend.stages.assign import asignar
+from backend.usuarios import sembrar_usuarios
 from backend.stages.dedupe import deduplicar
 from backend.stages.extract_ai import PROMPT_VERSION, extraer_conversaciones, medir_variabilidad
 from backend.stages.ingest import ErrorDeFormato, ingestar
 from backend.stages.load_reference import ErrorDeReferencia, cargar_referencia
 from backend.stages.normalize import ErrorDeCatalogo, normalizar
 from backend.stages.resolve_models import resolver_modelos
+from backend.stages.score import calcular_scores, guardar_scores
 
 app = typer.Typer(help="Pipeline de priorización de leads.", no_args_is_help=True)
 
 
-def _pendiente(etapa: str) -> None:
-    typer.echo(f"[{etapa}] etapa aún no implementada", err=True)
-    raise typer.Exit(code=1)
 
 
 @app.command()
@@ -120,14 +120,48 @@ def medir_ruido(
 
 @app.command()
 def score() -> None:
-    """Calcula el score de cada lead con los pesos del histórico."""
-    _pendiente("score")
+    """Puntúa cada cliente, lo ubica en su cola y le asigna temperatura según sus señales."""
+    resultados, referencia = calcular_scores()
+    guardar_scores(resultados)
+    typer.echo(f"[score] fecha_referencia {referencia:%Y-%m-%d %H:%M}, {len(resultados)} clientes")
+    for cola in ("primer_contacto", "seguimiento", "descartado"):
+        en_cola = [r for r in resultados if r.cola == cola]
+        temperaturas = {t: sum(r.temperatura == t for r in en_cola) for t in ("alta", "media", "baja")}
+        typer.echo(
+            f"[score] cola {cola:<16} clientes {len(en_cola):>4}  "
+            f"alta {temperaturas['alta']:>4}  media {temperaturas['media']:>4}  baja {temperaturas['baja']:>4}"
+        )
 
 
 @app.command()
 def assign() -> None:
-    """Reparte los leads del día entre asesores según capacidad."""
-    _pendiente("assign")
+    """Reparte la lista del día por asesor, con la capacidad de cada punto de venta."""
+    resumenes, dias = asignar()
+    typer.echo(f"[assign] días para absorber el represamiento: {dias}")
+    typer.echo(
+        "[assign] pv      asesores  capacidad  pendientes  seguimiento  objetivo_primer/seguim  "
+        "asignados_primer/seguim  libres  días_cartera"
+    )
+    for r in resumenes:
+        objetivo = f"{r.capacidad_por_cola['primer_contacto']}/{r.capacidad_por_cola['seguimiento']}"
+        asignados = f"{r.asignados_por_cola['primer_contacto']}/{r.asignados_por_cola['seguimiento']}"
+        typer.echo(
+            f"[assign] {r.punto_venta_id}  {r.asesores_activos:>8}  {r.capacidad:>9}  {r.pendientes:>10}  {r.seguimiento:>11}  "
+            f"{objetivo:>22}  {asignados:>23}  {r.plazas_libres:>6}  {r.dias_de_cartera:>12.1f}"
+        )
+    for r in resumenes:
+        for alerta in r.alertas:
+            typer.echo(f"[assign] ALERTA {r.punto_venta_id}: {alerta}")
+    total = sum(sum(r.asignados_por_cola.values()) for r in resumenes)
+    libres = sum(r.plazas_libres for r in resumenes)
+    typer.echo(f"[assign] asignados hoy {total} de {sum(r.capacidad for r in resumenes)} de capacidad; {libres} plazas libres")
+
+
+@app.command("seed-usuarios")
+def seed_usuarios() -> None:
+    """Crea o actualiza los usuarios de demo con las contraseñas del .env (nunca en un .sql)."""
+    for rol, cantidad in sembrar_usuarios().items():
+        typer.echo(f"[seed-usuarios] {rol:<8} {cantidad:>3}")
 
 
 @app.command("run-all")

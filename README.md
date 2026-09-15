@@ -122,7 +122,76 @@ Cinco versiones del prompt, medidas sobre una muestra fija y sobre subconjuntos 
   - Por eso el acierto de la extracción se mide contra un set etiquetado a mano, no contra el formulario.
   - **El score usa el SKU de la conversación cuando existe**, porque lo que el cliente pide por escrito es evidencia más rica que un campo de formulario. Se guardan los dos y el tablero muestra ambos cuando difieren.
 
+### Score: dos componentes con respaldo distinto
+
+El score **no se resume en un AUC único**, porque sus dos partes se validan de forma distinta:
+
+- **Señales de la conversación.** `pidio_cita`, `manifesto_cuota_inicial` y `forma_pago`, con pesos derivados por regresión logística sobre el histórico.
+  - Validadas fuera de pliegue con los puntos de producción: **AUC 0,552**.
+  - **El top 20 % cierra 1,31x la tasa base** (13 % contra 9,75 %).
+  - **Temperatura alta cierra 13,9 % y baja 7,4 %.**
+  - El score separa bien los extremos y ordena mal el centro.
+- **Urgencia.** No es una variable del modelo, es un **multiplicador por tramo** (≤1 h, 1–4 h, 4–24 h, 24–48 h, >48 h). Cada multiplicador se calcula como tasa de cierre del tramo sobre la tasa base: **15,1 % de cierre con contacto en menos de una hora (×1,55) contra 5,8 % pasadas 48 horas (×0,59)**.
+
+**La tabla de urgencia se lee al revés para un lead pendiente.**
+- En el histórico, las horas son **hasta** el primer contacto: el tramo describe un resultado.
+- En un lead pendiente, las horas son **desde el registro sin contacto**. Estar en el tramo ≤ 1 h no significa "cerró mucho": significa que **la ventana sigue abierta**, y que si se contacta ahora cae en el tramo que históricamente cerró 15,1 %.
+- **El multiplicador premia la oportunidad, no un resultado.** Un cliente ya contactado no tiene tramo: la ventana del primer contacto ya se usó.
+
+**Solo variables que existen al momento de priorizar.** El histórico trae `horas_al_primer_contacto` y `numero_contactos`, pero un lead pendiente no tiene ninguna de las dos. **El modelo aplicable pierde 3,1 puntos de AUC (0,592 → 0,561) frente al que tendría acceso a variables que no existen al momento de priorizar.** Es una limitación honesta del problema y está documentada.
+
+**Solo pesos que se distinguen del ruido.** Canal y precio del modelo salieron del score: sus cuatro pesos tenían intervalos bootstrap que cruzaban el cero, y sin ellos el AUC pasa de 0,561 a 0,559.
+
+**Pesos centrados en la tasa base.**
+- `SI` suma y `NO` resta, según sus log-odds frente a la tasa base.
+- `NO_INFORMA` / `no_informa` vale 0 puntos: sin información, sin ajuste.
+- `forma_pago = no_informa` cierra 12,3 % en el histórico, pero ahí significa "el asesor no lo registró" y en un lead actual significa "no hay conversación". Darle ese peso premiaría a los leads sin conversación por no tener información.
+- Pesos en `config/score_weights.json`.
+
+**Escala 0–100.** 50 es la tasa base: un cliente sin señales y sin urgencia queda en 50. El 0 y el 100 son la peor y la mejor combinación **alcanzable** con los pesos, sin recorte arbitrario.
+
+**Con una sola partición, el orden de los modelos no es confiable.** Se compararon logística, SVM RBF, Random Forest y Gradient Boosting con los mismos pliegues.
+- **Solo reordenar las filas** del histórico, con los mismos datos y la misma semilla, movió el AUC de la logística de 0,538 a 0,558. Con esa partición, Random Forest parecía ganar por más que su desviación.
+- El 0,619 del plan inicial no se reproduce con ningún conjunto de variables.
+- Las decisiones se tomaron sobre CV5 repetida con 10 semillas: ninguna familia supera a la logística por más que la desviación entre pliegues. A rendimiento igual, se eligió la que produce puntos explicables.
+
+### Priorizar no es predecir: dos colas, temperatura por señales, capacidad por punto de venta
+
+Los tramos de urgencia son correctos sobre probabilidad de cierre, pero para un lead pendiente **castigan haber esperado**. En un orden global, los clientes que nadie ha tocado quedaban al final (score 20 contra 50 de un contactado sin señales), que es exactamente el problema que plantea el gerente.
+
+- **Dos colas:** `primer_contacto` (nadie del grupo contactado, 451 clientes) y `seguimiento` (ya contactados, 860). Los 140 descartados no entran a ninguna.
+- **Orden dentro de cada cola:** score y, a igual score, **horas transcurridas, lo más fresco primero**. Es la urgencia en forma continua, y además disuelve los empates: 582 clientes de seguimiento tienen score 50.
+- **El multiplicador de urgencia es degenerado en este corte estático.** Los 451 pendientes llevan más de 48 h a la fecha de referencia, así que todos reciben ×0,59. Se conserva porque en operación diaria los leads del día sí caen en los tramos cortos.
+- **La temperatura describe la calidad del lead, no si entra hoy:** alta = dos señales positivas fuertes (cita, contado, inicial declarada), media = una, baja = ninguna. Así se puede expresar que un lead es alta y no entra hoy porque su punto de venta se llenó (16 clientes de seguimiento).
+- **La capacidad es por punto de venta, no global.** Un asesor de PV-003 no atiende un lead de PV-007.
+  - En cada punto de venta, primer contacto recibe ⌈pendientes / `DIAS_ABSORBER_REPRESAMIENTO`⌉ (por defecto 2 días) y seguimiento el resto.
+  - Se reparte entre asesores en proporción a su capacidad, con la misma proporción entre colas. **No se suponen asesores dedicados**, porque `asesores.csv` no trae roles.
+  - **La proporción se respeta mientras ambas colas tengan clientes.** Si una no llena su parte, el sobrante pasa a la otra dentro del mismo punto de venta: **el objetivo de 2 días es un mínimo, no un techo**. Resultado: 688 de 694 plazas asignadas. Las 6 libres están en PV-012, que no tiene más clientes activos.
+- **Cliente fusionado: se atiende en el punto de venta de su lead más reciente**, porque refleja el interés actual. El canónico es el más antiguo; en 39 grupos los dos leads están en puntos de venta distintos.
+- **Desbalance que el pipeline reporta cada día:**
+  - **PV-013**, con un solo asesor activo (12 diarios), no alcanza a absorber sus 31 pendientes en 2 días y no le queda nada para seguimiento: 7,0 días de cartera.
+  - **PV-014**, con un solo asesor activo, necesita 4,9 días.
+  - Otros seis puntos de venta superan los 2 días de cartera.
+- **El rango de la escala sale de las combinaciones posibles.** Sumar el máximo de cada variable daba +72, con contado e inicial `SI` juntos, que no pueden coexistir. El máximo real es +56.
+
+Detalle en [`docs/validacion.md`](docs/validacion.md), secciones 2.4 y 2.5.
+
+## Qué haría con más tiempo
+
+- **Agregar la interacción cita × forma de pago al modelo.** En el histórico, pedir cita no mejora el cierre cuando el cliente va a crédito (7–11 %), y sí lo sube a 14–24 % cuando va de contado o no informa. El modelo aditivo le da +24 a la cita en los dos casos, y eso desordena los deciles del medio. Se resuelve dentro de la logística con un término de interacción; hay que validarlo con CV repetida, porque varias combinaciones tienen menos de 50 leads.
+
+- **Probar la hipótesis del Random Forest dentro de la logística.**
+  - En producción, el bosque le saca +0,019 de AUC a la logística. Está por debajo de la desviación entre pliegues (0,038) y por eso no se persiguió: no compra nada hoy.
+  - La hipótesis: el precio toma solo 24 valores, uno por modelo de moto, y el bosque probablemente aprende una **tasa de cierre por modelo** que un efecto lineal del precio no puede representar.
+  - Si es así, se resuelve **dentro de la logística con variables dummy por segmento** (Trabajo, Deportiva, Scooter…), sin cambiar de familia ni necesitar SHAP para explicar los factores.
+  - Probarla bien exige validación cruzada repetida sobre el mismo protocolo, no una partición.
+
 ## Supuestos
+
+- **Recencia del descarte con `fecha_registro` como fecha sustituta.**
+  - En un cliente fusionado, `descartado` se resuelve por recencia: si el descarte es el estado más reciente del grupo, el cliente está descartado; si hay un estado posterior, la persona volvió y vale el estado del embudo.
+  - Los datos no traen la fecha de cambio de estado, así que "más reciente" se aproxima con la `fecha_registro` de cada lead del grupo. Es una **aproximación**: un registro nuevo después del descarte se interpreta como que el cliente volvió.
+  - Afecta a 13 de los 49 grupos fusionados.
 
 - **`FECHA_REFERENCIA`, no `now()`.** La validación de fechas futuras (y más adelante la urgencia del score) usa la máxima fecha inequívoca del dataset (2026-09-14), configurable por variable de entorno. El dataset es un corte estático: con la fecha del sistema, `normalize` daría resultados distintos según el día en que se corra. En operación real la referencia sería la fecha de ejecución.
 
