@@ -1,0 +1,38 @@
+# --- Secretos: causal de descalificación si se filtran ---
+.env
+.env.local
+*.pem
+*.key
+
+# --- Documento de la convocatoria: uso local, no se publica ---
+docs/enunciado.md
+docs/Assessment-Analista-IA-Enunciado.pdf
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# --- Node / Angular ---
+node_modules/
+frontend/dist/
+frontend/.angular/
+npm-debug.log*
+# Solo pnpm en este proyecto
+package-lock.json
+yarn.lock
+
+# --- Datos generados por el pipeline (los de entrada SÍ se commitean) ---
+data/output/
+data/cache/
+*.sqlite
+*.db
+
+# --- Sistema ---
+.DS_Store
+.idea/
+.vscode/

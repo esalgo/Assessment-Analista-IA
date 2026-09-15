@@ -1,0 +1,28 @@
+# Etapa 1 — compila el Angular
+FROM node:24-alpine AS build
+
+WORKDIR /app
+RUN corepack enable
+
+# Manifiestos primero para aprovechar la caché de capas
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY frontend/ .
+
+# Angular emite dist/frontend/browser o dist/frontend segun la version
+# y la configuracion de SSR. Normalizamos a /out para que la etapa
+# siguiente no dependa de eso.
+RUN pnpm build && \
+    if [ -d dist/frontend/browser ]; then \
+      mv dist/frontend/browser /out; \
+    else \
+      mv dist/frontend /out; \
+    fi && \
+    test -f /out/index.html
+
+# Etapa 2 — Caddy sirve el estático y hace de proxy hacia la API
+FROM caddy:2-alpine
+
+COPY --from=build /out /srv/frontend
+COPY Caddyfile /etc/caddy/Caddyfile

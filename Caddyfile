@@ -1,0 +1,43 @@
+# Caddy saca y renueva el certificado de Let's Encrypt solo.
+# No hay que tocar certbot ni rutas de certificados.
+#
+# REQUISITO: en Cloudflare, los registros A deben estar en "DNS only"
+# (nube gris). Con el proxy activado (nube naranja) el challenge falla
+# porque Cloudflare termina el TLS antes de que llegue a tu servidor.
+
+{
+	email {$EMAIL_TLS}
+}
+
+{$DOMINIO} {
+	encode gzip
+
+	# La API
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle /health {
+		reverse_proxy api:8000
+	}
+
+	# Docs de FastAPI, útiles en la sustentación
+	handle /docs* {
+		reverse_proxy api:8000
+	}
+	handle /openapi.json {
+		reverse_proxy api:8000
+	}
+
+	# El frontend Angular como estático, con fallback a index.html
+	# para que el enrutamiento del lado del cliente funcione
+	handle {
+		root * /srv/frontend
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+n8n.{$DOMINIO} {
+	reverse_proxy n8n:5678
+}

@@ -1,0 +1,28 @@
+# --- API ---
+# [standard] trae uvicorn y el comando `fastapi` (dev/run)
+fastapi[standard]
+pyjwt
+passlib[bcrypt]
+
+# --- Base de datos ---
+# psycopg3 con binarios precompilados. Sin ORM: SQL crudo.
+psycopg[binary,pool]
+
+# --- Pipeline de datos ---
+pandas
+rapidfuzz
+
+# --- Scoring ---
+# Solo para derivar los pesos del histórico. El score en runtime
+# es una suma de enteros, no una llamada al modelo.
+scikit-learn
+
+# --- LLM ---
+openai
+
+# --- CLI y configuración ---
+typer
+python-dotenv
+
+# --- Tests ---
+pytest

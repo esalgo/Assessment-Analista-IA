@@ -1,0 +1,87 @@
+# Stack completo del assessment. Levanta con: docker compose up -d --build
+#
+# Solo Caddy publica puertos al exterior (80/443).
+# Postgres y n8n viven en la red interna: no se exponen a internet.
+
+services:
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMINIO: ${DOMINIO}
+      EMAIL_TLS: ${EMAIL_TLS}
+    volumes:
+      # NO borres caddy_data. Guarda los certificados de Let's Encrypt.
+      # Sin este volumen, cada rebuild pide un certificado nuevo y el
+      # límite son 5 por semana para el mismo dominio. Si lo agotas,
+      # te quedas sin HTTPS hasta que el contador se reinicie.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - n8n
+
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: America/Bogota
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Sin `ports:` a propósito. Para conectarte con un cliente SQL, túnel SSH.
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      TZ: America/Bogota
+    volumes:
+      # Los archivos fuente del assessment, para la etapa `ingest`
+      - ./data/input:/app/data/input:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Sin `ports:`. Caddy hace de proxy hacia api:8000
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.38.3
+    restart: unless-stopped
+    environment:
+      N8N_HOST: n8n.${DOMINIO}
+      N8N_PROTOCOL: https
+      N8N_PORT: 5678
+      WEBHOOK_URL: https://n8n.${DOMINIO}/
+      N8N_PROXY_HOPS: 1
+      GENERIC_TIMEZONE: America/Bogota
+      TZ: America/Bogota
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      PIPELINE_TOKEN: ${PIPELINE_TOKEN}
+      # Sin N8N_BASIC_AUTH_*: no existe en la rama 2.x.
+      # La auth es la cuenta de propietario del primer acceso.
+      # n8n guarda su estado en SQLite dentro del volumen n8n_data.
+      # No lo conectes a tu Postgres: son dos bases separadas.
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  pg_data:
+  n8n_data:
+  caddy_data:
+  caddy_config:
