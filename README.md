@@ -82,6 +82,8 @@ data/input/ (5 archivos)                     n8n  ── cron 6:00 ─┐
 
 Una sola máquina, un `docker-compose.yml` para local y producción, cuatro servicios: `caddy` (TLS y estáticos), `api`, `postgres` y `n8n`. Solo Caddy publica puertos.
 
+**Los tres diagramas están en [`docs/arquitectura.md`](docs/arquitectura.md)**, en Mermaid: el flujo de datos etapa por etapa, el modelo entidad-relación de las 24 tablas y el despliegue en el VPS.
+
 **Todo lo que hace n8n se puede hacer sin n8n.** Dispara `POST /pipeline/run` y nada más: cero lógica en sus nodos. El mismo trabajo lo hace `python -m backend.cli run-all`, que es el plan B si la orquestación falla.
 
 ## Las ocho etapas
