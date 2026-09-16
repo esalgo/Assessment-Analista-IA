@@ -14,7 +14,6 @@ from backend.stages.score import (
     punto_venta_del_grupo,
     puntos_posibles,
     rango_log_odds,
-    sku_para_score,
     temperatura_por_senales,
     tramo_urgencia,
 )
@@ -36,13 +35,6 @@ def test_regla_no_aplica_si_la_inicial_no_salio_o_la_forma_de_pago_ya_viene() ->
     assert forma_pago_para_score({"forma_pago": "no_informa", "manifesto_cuota_inicial": "NO_INFORMA"}) == ("no_informa", None)
     assert forma_pago_para_score({"forma_pago": "contado", "manifesto_cuota_inicial": "NO_INFORMA"}) == ("contado", None)
     assert forma_pago_para_score({"forma_pago": "credito", "manifesto_cuota_inicial": "SI"}) == ("credito", None)
-
-
-def test_sku_de_la_conversacion_gana_y_formulario_es_respaldo() -> None:
-    assert sku_para_score("SKU-018", {"sku_resuelto": "SKU-006"}) == ("SKU-006", "conversacion")
-    assert sku_para_score("SKU-018", {"sku_resuelto": None}) == ("SKU-018", "formulario")
-    assert sku_para_score("SKU-018", None) == ("SKU-018", "formulario")
-    assert sku_para_score(None, None) == (None, None)
 
 
 def test_estado_mas_avanzado_del_embudo() -> None:

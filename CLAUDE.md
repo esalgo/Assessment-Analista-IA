@@ -276,7 +276,7 @@ Resto de campos: `modelo_interes_mencionado` y `cuota_inicial_cop` (nullable), `
 La salida del LLM en `extracciones_ia` nunca se modifica. Cuando el score necesita un valor distinto, lo calcula con una regla derivada en `backend/stages/score.py` y registra el nombre de la regla en `scores.factores`.
 
 - **`forma_pago_para_score`:** si `manifesto_cuota_inicial` es `SI` o `NO` y `forma_pago` es `no_informa`, el score usa `credito` (regla `inicial_mencionada_implica_credito`). Nadie que pague de contado dice "no tengo inicial". Aplica a 28 leads.
-- **`sku_para_score`:** el score usa el SKU de la conversación cuando existe y el del formulario como respaldo. Se guardan ambos y **el tablero muestra los dos cuando difieren**.
+- **SKU:** no entra al score desde `logit_v2` (el precio salió del modelo). Se guardan los dos (`leads.sku` y `payload.sku_resuelto`) y **el tablero muestra ambos cuando difieren**.
 
 **El SKU del formulario y el de la conversación son independientes en estos datos:** coinciden 3,6 % contra 4,1 % esperado por azar. No se usa uno para validar el otro. No escribir en ningún lado que "los clientes pidieron algo distinto": es un artefacto del generador sintético, no una afirmación de negocio que los datos sostengan.
 

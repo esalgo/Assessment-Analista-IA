@@ -53,17 +53,6 @@ def forma_pago_para_score(extraccion: dict) -> tuple[str, str | None]:
     return forma_pago, None
 
 
-def sku_para_score(sku_formulario: str | None, extraccion: dict | None) -> tuple[str | None, str | None]:
-    """El SKU de la conversación cuando existe: es lo que el cliente pidió por
-    escrito, evidencia más rica que un campo de formulario. Ambos se conservan
-    para que el tablero muestre los dos cuando difieran. Devuelve (sku, fuente)."""
-    if extraccion and extraccion.get("sku_resuelto"):
-        return extraccion["sku_resuelto"], "conversacion"
-    if sku_formulario:
-        return sku_formulario, "formulario"
-    return None, None
-
-
 # --- Consolidación del grupo fusionado ---------------------------------------
 
 

@@ -6,11 +6,13 @@ Entra: 1.503 filas de `leads.csv`, 677 conversaciones de WhatsApp, 2.200 cierres
 
 **Tablero:** `https://<DOMINIO>` · **API:** `https://<DOMINIO>/api/docs` · **Orquestación:** `https://n8n.<DOMINIO>`
 
+> **Sobre los datos de este repositorio.** Los cinco archivos de entrada están versionados en `data/input/` para que cualquiera pueda reproducir el pipeline completo. Su `LEEME.txt` declara: *"Los datos son sintéticos y no corresponden a clientes reales"*, así que los nombres, teléfonos, correos y conversaciones que aparecen en el tablero y en la documentación no son información de personas. Lo que sí es real y nunca entra al repositorio son las credenciales: el `.env` está en `.gitignore` desde el primer commit y no aparece en ningún punto del historial.
+
 ## El problema, en números del propio dataset
 
 | Hecho medido | Dónde está |
 |---|---|
-| Contactar en menos de 1 h cierra **15,1 %**; pasadas 48 h, **5,8 %**. La tasa base es 9,0 % | `docs/validacion.md` §2.3 |
+| Contactar en menos de 1 h cierra **15,1 %**; pasadas 48 h, **5,8 %**. La tasa base es 9,75 % (histórico sin los 179 "Sin gestión") | `docs/validacion.md` §2.3 |
 | **451 clientes** llevan más de 48 h sin que nadie los toque | `docs/validacion.md` §2.5 |
 | **823 de los 1.451 clientes no tienen conversación**: el score no puede depender de ella | `scores.sin_senal_conversacional` |
 | **49 grupos** son la misma persona registrada dos veces dentro de una empresa, y 41 de ellos traen estados distintos | "Deduplicación" |
@@ -149,10 +151,10 @@ Si la API responde 401 o 409 (ya hay una corrida en curso), la ejecución queda 
 
 ## Tests
 
-105 tests. No buscan cobertura: cubren los casos que rompen. La carpeta `tests/` no entra a la imagen, así que se monta al correrlos:
+104 tests. No buscan cobertura: cubren los casos que rompen. La carpeta `tests/` no entra a la imagen, así que se monta al correrlos:
 
 ```bash
-# 71 tests puros, sin base de datos
+# 70 tests puros, sin base de datos
 docker compose run --rm -v ./tests:/app/tests:ro -v ./pytest.ini:/app/pytest.ini:ro api pytest -q
 
 # los 12 de API, contra la base con el pipeline ya corrido
@@ -160,7 +162,7 @@ docker compose run --rm -e PRUEBAS_API_DATOS_REALES=1 \
   -v ./tests:/app/tests:ro -v ./pytest.ini:/app/pytest.ini:ro api pytest tests/test_api.py
 ```
 
-Los 34 restantes necesitan una base desechable en `TEST_DATABASE_URL` (ver el final de este archivo) o una base con datos; sin ellas se omiten en vez de fallar, y el comando lo dice.
+Los 22 restantes necesitan una base desechable en `TEST_DATABASE_URL` (ver el final de este archivo) o una base con datos; sin ellas se omiten en vez de fallar, y el comando lo dice.
 
 Ejemplos de lo que se prueba: `573223242028` normaliza a 10 dígitos, `08/15/2026` se lee como agosto, `Hnda CB 190R` resuelve por fuzzy, un duplicado entre empresas **no** se fusiona, una conversación huérfana va a cuarentena sin romper el pipeline, un asesor recibe 403 al pedir la cola de otro, y un `INSERT` cruzado falla con `violates row-level security policy`.
 
@@ -286,7 +288,7 @@ Cinco versiones del prompt, medidas sobre una muestra fija y sobre subconjuntos 
 
 - **Antes de atribuir una mejora al prompt se midió el ruido del modelo** (`python -m backend.cli medir-ruido`). Con `temperature=0`, solo `intencion_declarada` varía entre llamadas idénticas.
 - **Un arreglo de schema, no de texto.** El modelo escribe el JSON en el orden de las propiedades. `cuota_inicial_cop` iba antes de `forma_pago`, así que el monto se fijaba antes de saber que la compra era de contado. Reordenar eliminó la causa; agregar advertencias al prompt solo la compensaba y desplazaba errores a otros campos.
-- **"Tengo como 0 millones, ¿alcanza para la inicial?"** La definición inicial decía `SI` con monto 0, aplicando el principio de reportar literal. Pero `manifesto_cuota_inicial` no es un campo literal: es una categoría que cruza con el histórico, donde `SI` cierra 10,9 % contra 7,0 %. Un cliente con cero pesos pertenece al grupo de los que no tienen inicial, y ponerlo del otro lado contamina la variable calibrada.
+- **"Tengo como 0 millones, ¿alcanza para la inicial?"** La definición inicial decía `SI` con monto 0, aplicando el principio de reportar literal. Pero `manifesto_cuota_inicial` no es un campo literal: es una categoría que cruza con el histórico, donde `SI` cierra 11,8 % y `NO` 8,7 % (histórico sin "Sin gestión"). Un cliente con cero pesos pertenece al grupo de los que no tienen inicial, y ponerlo del otro lado contamina la variable calibrada.
   - v5 cambió la **definición de negocio**: `SI` exige un monto mayor que cero, y una cifra de cero es `NO`.
   - El acierto sobre los 35 casos pasó de ~30 % a **97 %** (68 de 70 llamadas).
   - La muestra de 10 escondía el problema por azar. Apareció al medir el subconjunto completo.
@@ -295,7 +297,7 @@ Cinco versiones del prompt, medidas sobre una muestra fija y sobre subconjuntos 
   - La coincidencia no supera el azar: en estos datos las dos señales son independientes (probablemente un artefacto del generador sintético) y no puedo usar una para validar la otra.
   - No es un error de extracción: sin LLM, el primer modelo que nombra el cliente da la misma coincidencia.
   - Por eso el acierto de la extracción se mide contra un set etiquetado a mano, no contra el formulario.
-  - **El score usa el SKU de la conversación cuando existe**, porque lo que el cliente pide por escrito es evidencia más rica que un campo de formulario. Se guardan los dos y el tablero muestra ambos cuando difieren.
+  - **El SKU no entra al score** desde `logit_v2`: el precio salió del modelo porque su peso no se distinguía del ruido. Se guardan los dos y el tablero muestra ambos cuando difieren.
 
 ### Score: dos componentes con respaldo distinto
 
