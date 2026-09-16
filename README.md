@@ -111,6 +111,8 @@ Tres decisiones que vale la pena mirar:
 - **Nada se borra.** Las filas inválidas van a la tabla `cuarentena` con un motivo específico; los leads absorbidos por el dedupe se quedan con `lead_canonico_id` y `motivo_fusion`.
 - **La salida del LLM no se corrige nunca.** Lo que el modelo devolvió queda intacto en `extracciones_ia`; cuando el score necesita otro valor, aplica una regla derivada con nombre y la registra en `scores.factores`.
 
+**Limitación: la empresa de un lead y la de su cliente coinciden por el código, no por el motor.** `leads` guarda `empresa_id` además de `cliente_id`, por dos motivos: la política de RLS compara la columna de la propia fila, y el lead existe desde `normalize`, antes de que `dedupe` le asigne cliente. Hoy las dos empresas coinciden porque `dedupe` asigna `cliente_id` filtrando por empresa y teléfono, pero ninguna restricción lo impone. La corrección sería una llave foránea compuesta `(cliente_id, empresa_id)` en `leads` hacia `UNIQUE (cliente_id, empresa_id)` en `clientes`, que haría imposible colgar un lead de un cliente de otra empresa.
+
 Las 10 migraciones están numeradas en `db/migrations/` y las aplica `backend.cli migrate`.
 
 ## Aislamiento multi-tenant
@@ -136,7 +138,7 @@ Dos trampas que costaron depuración y están documentadas abajo: `FORCE ROW LEV
 | `GET /health` | público | estado del servicio |
 | `POST /auth/login` | público | JWT con `empresa_id`, `asesor_id` y `rol` (2 h) |
 | `GET /leads/hoy` | asesor (la suya) / gerente (cualquiera de su empresa) | la cola del día, en dos colas ordenadas |
-| `GET /leads/{lead_id}` | autenticado | cliente consolidado: score, factores, citas y ambos SKU |
+| `GET /leads/{lead_id}` | asesor (solo clientes de su cola del día) / gerente (cualquiera de su empresa) | cliente consolidado: score, factores, citas y ambos SKU |
 | `GET /asesores` | gerente | asesores activos de su empresa |
 | `GET /resumen` | gerente | días de cartera por punto de venta |
 | `POST /pipeline/run` | n8n, con `X-Pipeline-Token` | dispara el pipeline en segundo plano (202) |
@@ -149,15 +151,17 @@ n8n (`n8n/workflow.json`, versionado) con dos nodos: Schedule Trigger a las 6:00
 
 Si la API responde 401 o 409 (ya hay una corrida en curso), la ejecución queda en rojo en el historial de n8n.
 
+**Limitación: un fallo dentro del pipeline no se ve en n8n.** `POST /pipeline/run` responde 202 y corre `run_all` en segundo plano, así que n8n marca la ejecución en verde antes de que empiece la primera etapa. Si una etapa falla (un error de conexión, un `ErrorDeCatalogo`, un `assert` que no se cumple), su transacción hace rollback y las etapas siguientes no corren: las anteriores quedan con los datos nuevos y desde la que falló en adelante siguen los de la corrida anterior, incluidas `scores` y `asignaciones`. Pero el error solo queda en `docker compose logs api`. La revisión diaria se hace ahí, no en el historial de n8n. La corrección sería guardar el estado de la última corrida (terminó bien o falló, con el mensaje) y mostrarlo en `GET /health` o en el resumen del gerente.
+
 ## Tests
 
-104 tests. No buscan cobertura: cubren los casos que rompen. La carpeta `tests/` no entra a la imagen, así que se monta al correrlos:
+105 tests. No buscan cobertura: cubren los casos que rompen. La carpeta `tests/` no entra a la imagen, así que se monta al correrlos:
 
 ```bash
 # 70 tests puros, sin base de datos
 docker compose run --rm -v ./tests:/app/tests:ro -v ./pytest.ini:/app/pytest.ini:ro api pytest -q
 
-# los 12 de API, contra la base con el pipeline ya corrido
+# los 13 de API, contra la base con el pipeline ya corrido
 docker compose run --rm -e PRUEBAS_API_DATOS_REALES=1 \
   -v ./tests:/app/tests:ro -v ./pytest.ini:/app/pytest.ini:ro api pytest tests/test_api.py
 ```

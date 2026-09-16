@@ -118,6 +118,23 @@ def test_detalle_de_un_lead_de_otra_empresa_no_existe(cliente: TestClient, ids: 
     assert cliente.get(f"/leads/{ids['lead_02']}", headers=token_gerente_01).status_code == 404
 
 
+def test_asesor_no_ve_el_detalle_de_un_cliente_de_otro_asesor_pero_el_gerente_si(
+    cliente: TestClient, ids: dict, token_asesor_01: dict, token_gerente_01: dict
+) -> None:
+    with conectar() as conn:
+        lead_ajeno = conn.execute(
+            """
+            SELECT lead_id FROM asignaciones
+            WHERE empresa_id = 'EMP-01' AND asesor_id <> %s
+              AND fecha = (SELECT max(fecha) FROM asignaciones)
+            ORDER BY lead_id LIMIT 1
+            """,
+            (ids["asesor_01"],),
+        ).fetchone()[0]
+    assert cliente.get(f"/leads/{lead_ajeno}", headers=token_asesor_01).status_code == 403
+    assert cliente.get(f"/leads/{lead_ajeno}", headers=token_gerente_01).status_code == 200
+
+
 def test_detalle_trae_factores_citas_y_skus(cliente: TestClient, token_asesor_01: dict) -> None:
     cola = cliente.get("/leads/hoy", headers=token_asesor_01).json()["leads"]
     detalles = [cliente.get(f"/leads/{lead['lead_id']}", headers=token_asesor_01).json() for lead in cola]

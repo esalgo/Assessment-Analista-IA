@@ -183,18 +183,38 @@ def leads_hoy(
 
 
 @router.get("/leads/{lead_id}")
-def detalle_lead(lead_id: str, conn: psycopg.Connection = Depends(sesion_tenant)) -> dict:
+def detalle_lead(
+    lead_id: str,
+    usuario: Usuario = Depends(usuario_actual),
+    conn: psycopg.Connection = Depends(sesion_tenant),
+) -> dict:
     """El cliente completo: su score con los factores, las citas textuales de
     la extracción y los dos SKU (formulario y conversación) cuando difieren.
 
-    Si lead_id es un lead absorbido por dedupe, se responde con su cliente
-    (el grupo del canónico). Un lead de otra empresa responde 404."""
+    - Si lead_id es un lead absorbido por dedupe, se responde con su cliente
+      (el grupo del canónico).
+    - Un lead de otra empresa responde 404: con RLS no existe.
+    - Un asesor solo ve los clientes de su cola del día, la misma fecha que
+      /leads/hoy; uno de otro asesor de su empresa responde 403. Un gerente
+      ve cualquiera de su empresa."""
     fila = conn.execute(
         "SELECT coalesce(lead_canonico_id, lead_id) FROM leads WHERE lead_id = %s", (lead_id,)
     ).fetchone()
     if fila is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "lead no encontrado")
     cliente_id = fila[0]
+
+    if usuario.rol == "asesor":
+        en_su_cola = conn.execute(
+            """
+            SELECT 1 FROM asignaciones
+            WHERE lead_id = %s AND asesor_id = %s
+              AND fecha = (SELECT max(fecha) FROM asignaciones)
+            """,
+            (cliente_id, usuario.asesor_id),
+        ).fetchone()
+        if en_su_cola is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "un asesor solo puede ver los clientes de su cola")
 
     leads = conn.execute(
         """

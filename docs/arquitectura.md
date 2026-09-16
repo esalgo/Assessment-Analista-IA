@@ -2,7 +2,7 @@
 
 Tres vistas del mismo sistema: **qué le pasa a un lead** (flujo de datos), **cómo están guardados** (modelo entidad-relación) y **dónde corre todo** (despliegue). Los diagramas son Mermaid, así que se versionan como texto y GitHub los dibuja solo.
 
-**Los mismos diagramas en SVG**, para verlos con zoom o llevarlos a una presentación: [flujo de datos](diagramas/flujo-datos.svg) · [MER: el camino de un lead](diagramas/mer-camino-del-lead.svg) · [MER: referencia](diagramas/mer-referencia.svg) · [despliegue](diagramas/despliegue.svg). Se abren en el navegador y escalan sin perder nitidez. Para regenerarlos después de cambiar un diagrama, pega el bloque en [mermaid.live](https://mermaid.live) y exporta a SVG.
+**Los mismos diagramas en SVG**, para verlos con zoom o llevarlos a una presentación: [flujo de datos](diagramas/flujo-datos.svg) · [MER: el camino de un lead](diagramas/mer-camino-del-lead.svg) · [MER: referencia](diagramas/mer-referencia.svg) · [despliegue](diagramas/despliegue.svg). Se abren en el navegador y escalan sin perder nitidez. Para regenerarlos después de cambiar un diagrama, pega el bloque en [mermaid.live](https://mermaid.live) y exporta a SVG. Mermaid exporta con fondo transparente, y las líneas oscuras desaparecen en visores con fondo oscuro: cada SVG lleva como primer elemento un `<rect id="fondo-blanco">` del tamaño del `viewBox`, que hay que volver a agregar tras exportar.
 
 ## 1. Flujo de datos
 
@@ -75,7 +75,7 @@ erDiagram
     }
     leads {
         text lead_id PK "RLS"
-        text cliente_id FK
+        bigint cliente_id FK
         text lead_canonico_id FK "si fue absorbido"
         jsonb motivo_fusion "regla y confianza"
         text canales "acumulados al fusionar"
