@@ -1,9 +1,11 @@
 # Caddy saca y renueva el certificado de Let's Encrypt solo.
 # No hay que tocar certbot ni rutas de certificados.
 #
-# REQUISITO: en Cloudflare, los registros A deben estar en "DNS only"
-# (nube gris). Con el proxy activado (nube naranja) el challenge falla
-# porque Cloudflare termina el TLS antes de que llegue a tu servidor.
+# Cloudflare va con el proxy activado (nube naranja) y SSL/TLS en
+# "Full (strict)": Cloudflare valida este certificado al hablar con el VPS.
+# El primer certificado se emite con la nube gris (DNS only); con el proxy
+# activo el challenge puede no llegar a Caddy. Si una renovación falla:
+# nube gris unos minutos, Caddy renueva, y se vuelve a naranja.
 
 {
 	email {$EMAIL_TLS}
@@ -40,7 +42,7 @@
 }
 
 # Si alguien escribe www, lo mandamos al dominio sin www: una sola URL.
-# Requiere también un registro para www en Cloudflare (CNAME al dominio, nube gris).
+# Requiere también un registro para www en Cloudflare (CNAME al dominio).
 www.{$DOMINIO} {
 	redir https://{$DOMINIO}{uri} permanent
 }

@@ -17,7 +17,7 @@ Se evalúa sobre 100 puntos. Los bloques pesados: Componente de IA (20), Datos y
 - OpenAI `gpt-4o-mini` con structured outputs — cliente con `base_url` configurable
 - FastAPI — `fastapi dev` en local, `fastapi run` en producción
 - Angular con **pnpm** (nunca npm ni yarn), compilado a estático y servido por Caddy
-- Despliegue: VPS de Hostinger con Docker Compose, dominio en Cloudflare (DNS only), TLS automático con Caddy
+- Despliegue: VPS de Hostinger con Docker Compose, dominio en Cloudflare (proxy, SSL/TLS Full strict), TLS automático con Caddy
 - n8n Community Edition `2.38.3` autohospedado en el mismo compose, con SQLite propio (no conectado al Postgres de la app)
 - n8n para orquestación (dispara webhook, **no contiene lógica**)
 

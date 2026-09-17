@@ -220,7 +220,7 @@ Una sola máquina, un `docker-compose.yml` idéntico en local y en producción: 
 ```mermaid
 flowchart TB
     U["Asesor / Gerente"] -->|"HTTPS 443"| CF
-    CF["Cloudflare DNS<br/>nube gris: solo resuelve"] --> C
+    CF["Cloudflare proxy<br/>SSL/TLS Full (strict)"] -->|"HTTPS 443"| C
 
     subgraph vps["VPS · red interna de Docker"]
         C["caddy<br/>TLS automático (Let's Encrypt)<br/>sirve el Angular compilado<br/>único que publica 80 y 443"]
@@ -247,6 +247,6 @@ flowchart TB
 
 - **Solo `caddy` publica puertos.** Postgres y n8n no son alcanzables desde internet; se hablan por nombre de servicio en la red interna de Docker.
 - **n8n llama a `http://api:8000`**, no a la URL pública: el disparo diario no sale a internet ni depende del DNS.
-- **La nube de Cloudflare está gris a propósito.** Con el proxy activo, el challenge de Let's Encrypt no llega a Caddy y el certificado no se emite.
+- **Cloudflare hace de proxy (nube naranja) con SSL/TLS en Full (strict).** Por seguridad: el DNS público resuelve a IPs de Cloudflare y no a la del VPS. Caddy emitió el certificado de Let's Encrypt con la nube gris y después se activó el proxy; Full (strict) obliga a Cloudflare a validar ese certificado al hablar con el VPS. Limitaciones: la renovación automática del certificado detrás del proxy no está verificada (si falla, nube gris unos minutos, Caddy renueva y se reactiva), y el firewall del VPS acepta 80/443 desde cualquier IP, así que quien ya conozca la IP puede saltarse Cloudflare.
 - **El CLI es el plan B:** todo lo que hace n8n se puede hacer por SSH con un comando, que es el seguro contra "la URL no funciona el día de la sustentación".
 - **El pipeline corre como superusuario y la API no.** El CLI escribe leads de las tres empresas a la vez; la API baja a `app_tenant` en cada request para que RLS la filtre.

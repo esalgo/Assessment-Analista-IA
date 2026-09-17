@@ -48,7 +48,7 @@ Hay un usuario por asesor activo (`<asesor_id en minúsculas>@example.com`) y un
 Requisitos: Docker con Compose. No hace falta Python ni Node en la máquina.
 
 ```bash
-cp .env.example .env          # llenar con valores reales (ver DEPLOY del servidor)
+cp .env.example .env          # llenar con valores reales
 docker compose up -d --build
 
 docker compose exec api python -m backend.cli migrate        # esquema + RLS
