@@ -4,7 +4,7 @@ Pipeline que convierte los leads crudos de tres comercializadoras de motos en **
 
 Entra: 1.503 filas de `leads.csv`, 677 conversaciones de WhatsApp, 2.200 cierres históricos, 24 motos y 42 asesores. Sale: 1.451 clientes únicos, cada uno con un score explicable, una temperatura y un puesto en la cola de un asesor concreto.
 
-**Tablero:** `https://<DOMINIO>` · **API:** `https://<DOMINIO>/api/docs` · **Orquestación:** `https://n8n.<DOMINIO>`
+**Tablero:** `https://personaldeploy.com/` · **API:** `https://personaldeploy.com/api/docs/` · **Orquestación:** `https://n8n.personaldeploy.com/`
 
 > **Sobre los datos de este repositorio.** Los cinco archivos de entrada están versionados en `data/input/` para que cualquiera pueda reproducir el pipeline completo. Su `LEEME.txt` declara: *"Los datos son sintéticos y no corresponden a clientes reales"*, así que los nombres, teléfonos, correos y conversaciones que aparecen en el tablero y en la documentación no son información de personas. Lo que sí es real y nunca entra al repositorio son las credenciales: el `.env` está en `.gitignore` desde el primer commit y no aparece en ningún punto del historial.
 
