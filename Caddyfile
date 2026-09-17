@@ -39,6 +39,12 @@
 	}
 }
 
+# Si alguien escribe www, lo mandamos al dominio sin www: una sola URL.
+# Requiere también un registro para www en Cloudflare (CNAME al dominio, nube gris).
+www.{$DOMINIO} {
+	redir https://{$DOMINIO}{uri} permanent
+}
+
 n8n.{$DOMINIO} {
 	reverse_proxy n8n:5678
 }

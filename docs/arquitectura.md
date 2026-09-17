@@ -2,7 +2,7 @@
 
 Tres vistas del mismo sistema: **qué le pasa a un lead** (flujo de datos), **cómo están guardados** (modelo entidad-relación) y **dónde corre todo** (despliegue). Los diagramas son Mermaid, así que se versionan como texto y GitHub los dibuja solo.
 
-**Los mismos diagramas en SVG**, para verlos con zoom o llevarlos a una presentación: [flujo de datos](diagramas/flujo-datos.svg) · [MER: el camino de un lead](diagramas/mer-camino-del-lead.svg) · [MER: referencia](diagramas/mer-referencia.svg) · [despliegue](diagramas/despliegue.svg). Se abren en el navegador y escalan sin perder nitidez. Para regenerarlos después de cambiar un diagrama, pega el bloque en [mermaid.live](https://mermaid.live) y exporta a SVG. Mermaid exporta con fondo transparente, y las líneas oscuras desaparecen en visores con fondo oscuro: cada SVG lleva como primer elemento un `<rect id="fondo-blanco">` del tamaño del `viewBox`, que hay que volver a agregar tras exportar.
+**Los mismos diagramas en SVG**, para verlos con zoom o llevarlos a una presentación: [flujo de datos](diagramas/flujo-datos.svg) · [MER: el camino de un lead](diagramas/mer-camino-del-lead.svg) · [MER: referencia](diagramas/mer-referencia.svg) · [despliegue](diagramas/despliegue.svg). Se abren en el navegador y escalan sin perder nitidez. Para regenerarlos después de cambiar un diagrama, pega el bloque en [mermaid.live](https://mermaid.live) y exporta a SVG, o guárdalo en un `.mmd` y corre `docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/data" minlag/mermaid-cli:11.4.2 -i diagrama.mmd -o diagrama.svg -b white` (así se generó `mer-camino-del-lead.svg`). Mermaid exporta con fondo transparente, y las líneas oscuras desaparecen en visores con fondo oscuro: cada SVG lleva como primer elemento un `<rect id="fondo-blanco">` del tamaño del `viewBox`, que hay que volver a agregar tras exportar.
 
 ## 1. Flujo de datos
 
@@ -52,7 +52,7 @@ flowchart TD
 
 ## 2. Modelo entidad-relación
 
-24 tablas. En un solo diagrama quedan ilegibles, así que van en dos: **el camino de un lead** y **los catálogos que lo sostienen**. Solo se muestran las columnas que explican una decisión; el esquema completo está en `db/migrations/`.
+24 tablas. En un solo diagrama quedan ilegibles, así que van en dos: **el camino de un lead** y **los catálogos que lo sostienen**. Solo se muestran las columnas que explican una decisión, más `empresa_id` en todas las tablas que la llevan, porque es la columna del aislamiento; el esquema completo está en `db/migrations/`.
 
 **La marca `RLS`** señala las ocho tablas con Row Level Security (`clientes`, `leads`, `conversaciones`, `mensajes`, `extracciones_ia`, `scores`, `asignaciones`, `asesores`). Todas llevan `empresa_id`, y en ellas una consulta de la API solo ve las filas de la empresa del token.
 
@@ -70,11 +70,13 @@ erDiagram
 
     clientes {
         bigint cliente_id PK "RLS"
-        text telefono_normalizado UK "único por empresa"
+        text empresa_id FK, UK "UNIQUE (empresa_id, telefono_normalizado)"
+        text telefono_normalizado UK "único por empresa, no global"
         text nombre
     }
     leads {
         text lead_id PK "RLS"
+        text empresa_id FK "la filtra RLS"
         bigint cliente_id FK
         text lead_canonico_id FK "si fue absorbido"
         jsonb motivo_fusion "regla y confianza"
@@ -88,23 +90,27 @@ erDiagram
     }
     conversaciones {
         text conversacion_id PK "RLS"
+        text empresa_id FK
         text lead_id FK
         text canal "siempre WhatsApp"
     }
     mensajes {
         text conversacion_id PK "RLS"
         int orden PK
+        text empresa_id FK
         text emisor "cliente | asesor"
         text texto
     }
     extracciones_ia {
         text lead_id PK "RLS"
         text conversacion_hash PK "clave de caché"
+        text empresa_id FK
         text prompt_version
         jsonb payload "salida del LLM, nunca corregida"
     }
     scores {
         text lead_id PK "RLS: un cliente = su lead canónico"
+        text empresa_id FK
         int score "0-100, 50 = tasa base"
         text temperatura "alta | media | baja"
         jsonb factores "puntos por variable + reglas derivadas"
@@ -115,6 +121,7 @@ erDiagram
     asignaciones {
         date fecha PK "RLS"
         text lead_id PK
+        text empresa_id FK
         text asesor_id FK
         int orden
         text cola
