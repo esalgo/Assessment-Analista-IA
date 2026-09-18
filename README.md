@@ -58,6 +58,18 @@ docker compose exec api python -m backend.cli seed-usuarios  # usuarios de demo
 
 En local, `DOMINIO=localhost docker compose up -d --build`: con el dominio real, Caddy pediría certificados a Let's Encrypt desde una máquina a la que el DNS no apunta.
 
+Levantado así, todo queda en estas tres URLs:
+
+| URL local | Qué es |
+|---|---|
+| `https://localhost` | el tablero |
+| `https://localhost/api/docs` | la documentación interactiva de la API |
+| `https://n8n.localhost` | n8n, para ver o disparar el workflow |
+
+Siempre `https`, no `http`: Caddy responde 308 al puerto 80. En local el navegador avisa que el
+certificado no es de confianza — es el de la CA interna de Caddy, que solo existe en esa máquina:
+*Avanzado → Continuar*. Con el dominio real el certificado es de Let's Encrypt y no hay aviso.
+
 Cada etapa corre sola y es idempotente: reejecutar no duplica nada ni cambia el resultado.
 
 ```bash
@@ -87,6 +99,20 @@ Una sola máquina, un `docker-compose.yml` para local y producción, cuatro serv
 **Los tres diagramas están en [`docs/arquitectura.md`](docs/arquitectura.md)**, en Mermaid: el flujo de datos etapa por etapa, el modelo entidad-relación de las 24 tablas y el despliegue en el VPS.
 
 **Todo lo que hace n8n se puede hacer sin n8n.** Dispara `POST /pipeline/run` y nada más: cero lógica en sus nodos. El mismo trabajo lo hace `python -m backend.cli run-all`, que es el plan B si la orquestación falla.
+
+## Stack técnico
+
+| Capa | Tecnología |
+|---|---|
+| Backend y pipeline | Python 3.12 · FastAPI |
+| Base de datos | PostgreSQL 18, con RLS |
+| Frontend | Angular 22 |
+| IA | SDK de OpenAI · `gpt-4o-mini` con structured outputs |
+| Orquestación | n8n (Schedule Trigger diario) |
+| Servidor web y TLS | Caddy 2 |
+| Ejecución | Docker Compose, 4 servicios en una sola máquina |
+
+Las versiones exactas de todo lo demás están fijadas en `requirements.txt`, `frontend/pnpm-lock.yaml` y las etiquetas de imagen de `docker-compose.yml`: ningún `latest`, para que el build del VPS instale lo mismo que se verificó en local.
 
 ## Las ocho etapas
 

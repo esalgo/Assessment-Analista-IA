@@ -2,7 +2,7 @@
 
 Convenciones técnicas del repositorio. Léelo completo antes de escribir código.
 
-Este archivo vive en la raíz del repo (`project/`) y **sí se commitea**: documenta las reglas con las que se construyó el sistema. El contexto de la prueba, el cronograma y el enunciado están un nivel más arriba, en el `CLAUDE.md` del workspace.
+Este archivo vive en la raíz del repo (`project/`) y **sí se commitea**: documenta las reglas con las que se construyó el sistema.
 
 ## Qué es esto
 
